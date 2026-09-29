@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Compiled release artifact
+main.js
+*.map
+
+# Obsidian local plugin state
+data.json
+
+# Local development backups
+.backup-*/
+*.bak
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db

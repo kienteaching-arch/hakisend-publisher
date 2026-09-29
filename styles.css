@@ -1,0 +1,13 @@
+/* HakiSend Publisher v0.1.0 */
+.hakisend-publisher-note {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+}
+
+.hakisend-publisher-status {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-small);
+}

@@ -1,0 +1,19 @@
+{
+  "name": "hakisend-obsidian-publisher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "builtin-modules": "latest",
+    "esbuild": "latest",
+    "obsidian": "latest",
+    "typescript": "latest"
+  },
+  "description": "Publish Markdown notes from Obsidian to HakiSend.",
+  "license": "MIT"
+}

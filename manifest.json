@@ -1,0 +1,9 @@
+{
+  "id": "hakisend-publisher",
+  "name": "HakiSend Publisher",
+  "version": "0.1.0",
+  "minAppVersion": "1.11.4",
+  "description": "Publish Markdown notes from Obsidian to HakiSend.",
+  "author": "HakiSend",
+  "isDesktopOnly": false
+}
