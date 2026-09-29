@@ -4653,12 +4653,6 @@ class HakiSendPublisherSettingTab
 
         containerEl.empty();
 
-        new Setting(containerEl)
-            .setName(
-                "HakiSend Publisher"
-            )
-            .setHeading();
-
         const secure =
             this.plugin
                 .hasSecureConnection();
