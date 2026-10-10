@@ -71,3 +71,11 @@ Stop here until the actual production API contract is known; do not invent new e
 - A Phase 2B candidate package explicitly returns `content.format = html`, `editable_source_available = false`, `roundtrip_safe = false`. It is a **read-only API candidate** with no automatic publication, no migrations and an intentionally disabled `--apply`.
 - For future editable sync, store the original submitted Markdown atomically with rendered HTML, track provenance and freshness when web editor modifies HTML, and require atomic server revision preconditions on update. Existing legacy HTML must remain read-only unless the author opts into conversion.
 - Do not count a Phase 2B `--check` PASS as authenticated integration-test approval.
+
+## Phase 2C gate: production metadata-only database/schema inspection
+
+The owner ran Phase 2B `APP=/var/www/sites/hakisend.com/app bash run.sh --check` twice with matching results: `SITE_PLUGIN_VERSION=0.15.3`, `BASE_CHECKSUM=PASS`, `CANDIDATE_PHP_SYNTAX=PASS`, `READ_ENDPOINTS=3`, `PRODUCTION_CHANGED=NO`, `RESULT=CHECK_PASS_NO_CHANGES`. The outcome confirms static compatibility, **not endpoint correctness nor approval to deploy**.
+
+Next: run `hakisend-ob-sync-phase2c-schema-audit.sh` on the HakiSend VPS. This script only prints production route listings and metadata (column names/types and index definitions) for Site Posts, Post Tags, Post Translations, Categories. It performs no migrations, POST/PUT, row reads or writes. We need to establish whether timestamps have second vs microsecond precision, whether `updated_at`/ `deleted_at` composite indexes exist, and whether nullable source Markdown/revision fields are currently present before deciding on cursor semantics and candidate migrations.
+
+**Release blockers still open:** real authenticated endpoint permission tests, test DB integration for pagination, timestamp/tags-only change capture, soft-delete/restore, source-Markdown fidelity, server-side compare-and-swap on writes, rollback plan. Phase 2B explicitly has `--apply` disabled. Do not deploy merely on a green static `--check`.
