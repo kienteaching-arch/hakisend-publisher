@@ -1,0 +1,43 @@
+# Content Sync Phase 0 — Production read-side API audit
+
+Date: 2026-10-10. This is a design document, **not** a claim that the described read endpoints exist on HakiSend.
+
+## Confirmed publisher contract from plugin v0.1.3
+- OAuth browser connection and secure token storage; Site discovery `GET /api/v1/hakisend/sites`.
+- Category lookup `GET /api/v1/hakisend/sites/{siteUid}/categories`.
+- Markdown upsert `PUT /api/v1/hakisend/sites/{siteUid}/posts/upsert`, external identity `{source: obsidian, id: external_id}`.
+- Publishing is a separate Site operation.
+- Existing plugin does **not** import the remote Post body into the vault and does not have a known read-side Post list/detail contract.
+
+## Required evidence from production HakiSend
+1. Authenticated route listing for the actual Site Posts read API (GET list, GET detail/body, changes-since, deletions).
+2. Server code paths for controller, DTO/resource serialization, service, model, migration; verify that Markdown stored as authored can be returned without losing local links/featured media.
+3. Source/version fields: Site UID, Post UID, external ID, created_at/updated_at, content hash/revision, tombstone/deleted_at, publication/scheduled state.
+4. Token scopes / authorizations for listing and reading each Site; ensure a user cannot read another owner's Posts.
+5. Pagination and timezone filtering; validate stable ordering across pagination and per-site Locale semantics.
+6. Server write preconditions or atomic compare-and-swap for conflict prevention (ETag/If-Match or version/hash), including upsert semantics.
+7. Rate limits, request IDs, and audit logs. Never collect credentials, customer data, or Post contents in a diagnostic bundle.
+
+## User-facing Sync Mode semantics
+- **All**: bootstrap all accessible Posts from explicitly selected Sites, paginating from the oldest to newest; show counts and dry-run. No unilateral delete.
+- **From now**: record the server-derived high-watermark at activation; ingest subsequent changes only. Do not confuse with local device clock.
+- **Since date**: inclusive start of a date interpreted in an explicitly selected timezone; convert to UTC cursor; fetch paginated changes from that point.
+- **One-way import** or **bidirectional reconcile** must be a separate choice from date range and from Vault Sync. Never enable blind upload of all local notes as a side effect of downloading Posts.
+
+## Initial sync and conflict policy
+- Keep independent state per Site and per local Vault, recording `site_uid`, `post_uid`, external ID, content hash, server revision, last successful cursor, and a safe local file path.
+- Before every write compare current server revision with the last synced base revision. On divergence, preserve both sides, create local conflict copy, and ask for a deliberate resolution.
+- Reject external ID collisions across Sites and duplicate local notes; Site UID is part of identity. Do not map only by filename/title.
+- Reads paginate with resumable cursor. HTTP retries are bounded; write retries use idempotency keys.
+- No automatic publishing, emailing, or deleting from ordinary sync actions.
+- Obsidian Sync or independently chosen vault sync transports local files/attachments between desktop and phone. HakiSend Content Sync is not a general-purpose filesystem sync. Each device independently authorizes HakiSend; never copy secure tokens in vault settings.
+- Obsidian mobile must use supported APIs and touch-friendly UI; background sync is not guaranteed.
+
+## Production evidence gathering
+Read-only audit helper was prepared in this ChatGPT conversation as `hakisend-obsidian-sync-audit-readonly.sh`. Run on the HakiSend VPS with:
+```bash
+bash hakisend-obsidian-sync-audit-readonly.sh /var/www/sites/hakisend.com/app
+```
+The helper prints route URI/method/action, Site plugin version, relevant code filenames, and source file/line references only; it prints no DB rows, credentials or Post bodies.
+
+Stop here until the actual production API contract is known; do not invent new endpoints or run migrations on production.
