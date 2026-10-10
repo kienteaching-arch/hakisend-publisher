@@ -61,3 +61,13 @@ bash hakisend-obsidian-sync-audit-readonly.sh /var/www/sites/hakisend.com/app
 The helper prints route URI/method/action, Site plugin version, relevant code filenames, and source file/line references only; it prints no DB rows, credentials or Post bodies.
 
 Stop here until the actual production API contract is known; do not invent new endpoints or run migrations on production.
+
+## Phase 2B service audit — verified from 10 PHP files (2026-10-10)
+
+- **Critical fidelity result:** `PublishingContentService::upsertPost` reads `content.body` as Markdown, calls `renderBody($body)`, then persists `SitePost.content = $html`. Existing Posts schema has no raw Markdown column. Therefore do not label a read-side API response as Markdown, and do not overwrite local Markdown with returned HTML. HTML-only legacy records must be previewed/read-only until explicitly converted.
+- `SitePost` uses `SoftDeletes`; timestamp/deletion polling is possible, but it is a state scan, not a reliable append-only event log. Hard-deletions cannot be recovered from soft-delete feed alone.
+- `SitePost::refreshSourceHash()` hashes rendered content and several authoring fields, but not tag relations. Tags-only changes may be reported by Upsert as updated without changing the Post row's `updated_at`, so a timestamp-based changes feed can miss them.
+- `PublishingAuthorizationService::SCOPES` already includes `content:read`. Site entitlement/ownership checks exist; reusing them is necessary but not sufficient until cross-tenant and token-scope integration tests pass.
+- A Phase 2B candidate package explicitly returns `content.format = html`, `editable_source_available = false`, `roundtrip_safe = false`. It is a **read-only API candidate** with no automatic publication, no migrations and an intentionally disabled `--apply`.
+- For future editable sync, store the original submitted Markdown atomically with rendered HTML, track provenance and freshness when web editor modifies HTML, and require atomic server revision preconditions on update. Existing legacy HTML must remain read-only unless the author opts into conversion.
+- Do not count a Phase 2B `--check` PASS as authenticated integration-test approval.
