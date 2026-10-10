@@ -5,6 +5,10 @@
 
 ## P1 — Multi-Site folder publishing (implemented in this branch)
 - Add `folderSiteMappings: [{folderPath,siteUid}]` to plugin settings (backward-compatible empty array).
+- Add `folderCategoryMappings: [{folderPath,siteUid,categoryUid,categoryTitle?}]`; each child folder can map to a site-specific category UID, inheriting into arbitrary deeper subfolders. Same Category title may occur on different Sites with distinct UIDs.
+- Category resolution priority: explicit `category_uid` in note → legacy explicit `category` slug/name → longest-prefix Category folder mapping (matching resolved Site) → legacy last-folder-name match. Do not choose the first available Category silently during Save. New Post pins both `site_uid` and `category_uid` in Properties.
+- Categories are real server entities returned by `GET /sites/:siteUid/categories`; mapping UI requires selecting a Category returned for the selected Site. It refuses to map a child folder to a Site different from its parent Site route.
+- Moving a previously published note between Category folders must not silently change the destination Category, because the note pins `category_uid`; user must deliberately select another Category in Edit Post Properties. This matches the legacy invariant of explicit note Category.
 - Resolve destination: `site_uid` or legacy `site` frontmatter, then longest-prefix vault folder mapping, then default site.
 - Validate destination against discovered authorized Sites. A bad explicit UID or stale folder mapping must fail closed rather than redirecting to another Site.
 - Create new notes with pinned `site_uid`. Provide command to override/remove per-note pin.
@@ -49,7 +53,9 @@ email:
 
 ## Acceptance / release gates
 - Existing connected user retains OAuth token and default-site behavior on upgrade.
-- Four mapped folders publish correctly (parent vs child route precedence). Per-note pin overrides route.
+- Four mapped Site folders publish correctly (parent vs child route precedence). Per-note pin overrides route.
+- Each Site supports multiple Category subfolders. Nested subfolders inherit the nearest Category UID mapping; same Category labels across Sites remain isolated.
+- Newly created notes pin Site UID and Category UID; editing an existing note pins Category UID. A stale/deleted Category UID fails closed, no silent fallback.
 - Stale/inaccessible Site never publishes into fallback Site.
 - Save, Edit Properties, New Post, Schedule and Publish Now agree on Site selection.
 - Mobile install: connect, save draft and schedule via Obsidian mobile; fallback UI is touch friendly.
