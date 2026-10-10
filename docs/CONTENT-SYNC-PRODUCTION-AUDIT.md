@@ -79,3 +79,13 @@ The owner ran Phase 2B `APP=/var/www/sites/hakisend.com/app bash run.sh --check`
 Next: run `hakisend-ob-sync-phase2c-schema-audit.sh` on the HakiSend VPS. This script only prints production route listings and metadata (column names/types and index definitions) for Site Posts, Post Tags, Post Translations, Categories. It performs no migrations, POST/PUT, row reads or writes. We need to establish whether timestamps have second vs microsecond precision, whether `updated_at`/ `deleted_at` composite indexes exist, and whether nullable source Markdown/revision fields are currently present before deciding on cursor semantics and candidate migrations.
 
 **Release blockers still open:** real authenticated endpoint permission tests, test DB integration for pagination, timestamp/tags-only change capture, soft-delete/restore, source-Markdown fidelity, server-side compare-and-swap on writes, rollback plan. Phase 2B explicitly has `--apply` disabled. Do not deploy merely on a green static `--check`.
+
+
+## Phase 2C passed; Phase 2D source-fidelity candidate prepared
+
+- Owner-provided Phase 2C v2 schema audit result: `RESULT=SCHEMA_AUDIT_PASS_READ_ONLY` on MySQL, Sites v0.15.3.
+- `hakisend_site_posts` has `content=longtext`, `updated_at=timestamp`, `deleted_at=timestamp`; unique external identity index `(site_id, external_source, external_id_hash)`. No raw Markdown field, and no composite Site/time change-feed index.
+- Translations have an independent HTML content field and their own `updated_at`; tags are stored in `hakisend_site_post_tags`. A Posts-only time cursor is insufficient for reliable changes across tags and translations.
+- Proposed Phase 2D candidate (outside the Obsidian repo, supplied as standalone tarball for checking): an additive `hakisend_site_post_sources` table storing raw Markdown, Markdown SHA-256, and rendered HTML SHA-256, updated in the same transaction as `PublishingContentService::upsertPost`. On reads, a separate service permits returning editable Markdown only if the saved source and current stored HTML still match both hashes; existing HTML-only posts remain read-only. The candidate explicitly sets `roundtrip_safe=false` until optimistic concurrency is implemented.
+- Safety: the `run.sh --check` candidate compares the existing PublishingContentService SHA-256, checks PHP syntax and new-file absence, and does not modify production. `--apply` and `--rollback` deliberately disabled. Local static checks and a baseline-mirror `--check` passed; live MySQL integration tests are **not done**.
+- Next gate: candidate `--check` against production, then isolated MySQL integration and review of write preconditions/event cursor. Do not run migrations on production based on this check alone.
