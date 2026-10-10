@@ -5,6 +5,7 @@ import { Modal,
     PluginSettingTab,
     Setting,
     TFile,
+    TFolder,
     requestUrl,
 } from "obsidian";
 
@@ -2289,6 +2290,116 @@ export default class HakiSendPublisherPlugin
             throw new Error(`Category folder "${routes[0].folderPath}" belongs to a different HakiSend Site. Review site_uid or the folder route.`);
         }
         return routes[0];
+    }
+
+    openAddCategoryRouteModal(): void {
+        const sites = this.settings.sites;
+        if (!sites.length) {
+            new Notice("Connect HakiSend and refresh Sites before mapping Categories.");
+            return;
+        }
+        const modal = new Modal(this.app);
+        modal.titleEl.setText("Map Obsidian folder to HakiSend Category");
+        modal.contentEl.createEl("p", {
+            text: "Each Site has its own Categories. Child folders inherit the closest Category route.",
+        });
+        let folderPath = "";
+        let siteUid = sites[0].uid;
+        let categoryUid = "";
+        let loadedCategories: HakiSendCategory[] = [];
+        let loadSequence = 0;
+
+        new Setting(modal.contentEl)
+            .setName("Obsidian folder")
+            .setDesc("Existing vault-relative Category folder, such as KIEN OS/Parenting.")
+            .addText((input) => input
+                .setPlaceholder("KIEN OS/Parenting")
+                .onChange((value) => { folderPath = value; }));
+
+        const categorySetting = new Setting(modal.contentEl)
+            .setName("Category")
+            .setDesc("Loading Categories from selected HakiSend Site...");
+        const reloadCategories = async (): Promise<void> => {
+            const request = ++loadSequence;
+            loadedCategories = [];
+            categoryUid = "";
+            categorySetting.controlEl.empty();
+            categorySetting.setDesc("Loading authorized Categories...");
+            try {
+                const token = await this.getAccessToken();
+                if (!token) throw new Error("HakiSend is not connected.");
+                const loaded = await this.categoriesForSite(siteUid, token);
+                if (request !== loadSequence) return;
+                loadedCategories = loaded;
+                categorySetting.setDesc(loaded.length
+                    ? "Select one Category from this Site."
+                    : "No Categories exist on this Site.");
+                categorySetting.addDropdown((dropdown) => {
+                    dropdown.addOption("", "Choose a Category");
+                    for (const category of loaded) {
+                        dropdown.addOption(category.uid, category.title + " (" + category.slug + ")");
+                    }
+                    dropdown.setValue("");
+                    dropdown.onChange((value) => { categoryUid = value; });
+                });
+            } catch (error) {
+                if (request !== loadSequence) return;
+                categorySetting.setDesc("Cannot load Categories: " + this.safeErrorMessage(error));
+            }
+        };
+
+        new Setting(modal.contentEl)
+            .setName("Site")
+            .addDropdown((dropdown) => {
+                for (const site of sites) dropdown.addOption(site.uid, site.name);
+                dropdown.setValue(siteUid);
+                dropdown.onChange((value) => {
+                    siteUid = value;
+                    void reloadCategories();
+                });
+            });
+
+        // Load the selected Site's live Categories after setting up the modal.
+        void reloadCategories();
+
+        new Setting(modal.contentEl)
+            .addButton((button) => button.setButtonText("Cancel")
+                .onClick(() => modal.close()))
+            .addButton((button) => button.setButtonText("Save mapping").setCta()
+                .onClick(async () => {
+                    const folder = normalizeFolderPath(folderPath);
+                    const selected = loadedCategories.find((item) => item.uid === categoryUid);
+                    if (!folder || !selected) {
+                        new Notice("Choose an existing folder and a HakiSend Category.");
+                        return;
+                    }
+                    const target = this.app.vault.getAbstractFileByPath(folder);
+                    if (!target || !(target instanceof TFolder)) {
+                        new Notice("Create this folder in Obsidian before mapping it.");
+                        return;
+                    }
+                    try {
+                        const resolvedSite = this.resolveSiteForFolder(folder);
+                        if (resolvedSite !== siteUid) {
+                            throw new Error("This folder routes to a different Site. Set its parent Site route first.");
+                        }
+                        this.settings.folderCategoryMappings = this.settings.folderCategoryMappings
+                            .filter((item) => item.folderPath !== folder);
+                        this.settings.folderCategoryMappings.push({
+                            folderPath: folder,
+                            siteUid,
+                            categoryUid: selected.uid,
+                            categoryTitle: selected.title,
+                        });
+                        await this.saveSettings();
+                        modal.close();
+                        this.settingTab?.display();
+                        new Notice("Category folder mapping saved.");
+                    } catch (error) {
+                        new Notice("Category mapping failed: " + this.safeErrorMessage(error));
+                    }
+                }));
+        modal.open();
     }
 
     private openSelectSiteForNote(): void {
@@ -4903,6 +5014,30 @@ class HakiSendPublisherSettingTab
                 await this.plugin.saveSettings();
                 this.display();
             }));
+
+        containerEl.createEl("h3", { text: "Category folder mappings" });
+        containerEl.createEl("p", {
+            text: "A Category is specific to one HakiSend Site. Map each Category folder to its actual server Category UID. Child folders inherit the mapping.",
+            cls: "setting-item-description",
+        });
+        for (const route of this.plugin.settings.folderCategoryMappings) {
+            const site = sites.find((candidate) => candidate.uid === route.siteUid);
+            new Setting(containerEl)
+                .setName(route.folderPath)
+                .setDesc((site?.name ?? "Unavailable Site")
+                    + " → " + (route.categoryTitle ?? route.categoryUid))
+                .addButton((button) => button.setButtonText("Remove").onClick(async () => {
+                    this.plugin.settings.folderCategoryMappings = this.plugin.settings.folderCategoryMappings
+                        .filter((item) => item !== route);
+                    await this.plugin.saveSettings();
+                    this.display();
+                }));
+        }
+        new Setting(containerEl)
+            .setName("Map a Category folder")
+            .setDesc("Select the folder, parent Site, and a real Category from HakiSend.")
+            .addButton((button) => button.setButtonText("Add Category mapping")
+                .onClick(() => this.plugin.openAddCategoryRouteModal()));
 
         new Setting(containerEl)
             .setName("Default Site")
