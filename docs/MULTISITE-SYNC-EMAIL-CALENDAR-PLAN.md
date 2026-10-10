@@ -63,3 +63,40 @@ email:
 - Preview percentage matches email exactly (safe excerpt boundary); zero or duplicate sends after retry; unsubscribe respected.
 - Calendar 1/2/3 posts/day counts, filters, timezone boundaries, server discrepancies, offline state tested.
 - Deploy with rollback; no production mutation from unreleased development branch.
+
+
+## P2/P3 addendum — Mobile-first commands and standalone email campaigns (2026-10-10)
+
+### Touch-native mobile controls (required, not a cosmetic follow-up)
+- `Ctrl+P`/Command Palette remains a desktop shortcut **only**. All primary actions — New Post, Save Draft, Sync, Preview, Schedule, Publish, Create Email, Test Send, Send Campaign, Campaign Status — must be reachable through touch-sized controls inside an Obsidian plugin view, ribbon/menu or mobile-safe modal.
+- Use Site → Category → destination folder pickers with tappable search; no hover-only interactions, keyboard-only instructions, or long desktop forms. Confirm destructive, public or irreversible actions, show progress and retry/queue state, and handle session expiration on mobile.
+- Distinguish saving an editable note offline from remotely executing a send/publish action: server confirmation and idempotency are required. No claims of guaranteed background delivery.
+
+### Standalone Obsidian-authored HakiSend email campaigns
+- **Independent workflow** from `free_preview_percent` / "send free part of published article". A note can represent an email-only campaign without creating/publishing a Post.
+- Author may start a campaign on desktop **or phone**, choose authorized HakiSend audience/list, sender identity, per-Site template, subject/preheader, preview, test send and explicit final confirmation. Respect unsubscribes/suppression, send permissions and auditing.
+- Per-campaign setting `store_on_hakisend: true|false`. If `false`, the authoring body and editable archive remain only in the Obsidian vault; HakiSend still needs to process outbound content transiently and retain minimum delivery/compliance metadata/logs as required. Do not promise absolutely zero server retention until backend retention policies are audited.
+- If `store_on_hakisend: true`, an additional opt-in `publish_email_archive: true|false` controls whether an email archive is internet-visible. **Default `publish_email_archive: false`**. Save to HakiSend is not a public publication; never infer public visibility from a delivery event.
+- `store_on_hakisend: false` implies `publish_email_archive: false`; disable or hide public-archive control. Changing either from false to true requires an explicit confirmation and authorization.
+- Proposed frontmatter (pending backend investigation):
+```yaml
+hakisend_type: email_campaign
+site_uid: "<site UID>"
+email:
+  list_uid: "<list UID>"
+  template_uid: "<template UID>"
+  subject: "<email subject>"
+  store_on_hakisend: false
+  publish_email_archive: false
+  status: local_draft
+```
+- A confirmed campaign send must not implicitly publish an email archive nor publish or modify a Website Post; if no archive is stored, the vault's note remains authoritative. The API must expose a short-lived send/dispatch operation with idempotent campaign ID, permissions, and delivery outcome without exposing subscriber data in Obsidian notes.
+- If archive publishing is requested, protect recipient-specific links/tokens and private audience details; publish only a sanitized public rendition, never the original recipient-personalized email or subscriber list.
+- Keep free-preview email logic separately policy-bound to **public Post publication** and independent from standalone campaigns.
+
+### Required tests
+1. Touch-only new Post and email campaign send on Android/iOS: no keyboard shortcut necessary.
+2. Standalone email can be sent without publishing a Post, with retry/no duplicate sends.
+3. Saved HakiSend email remains **private by default**, across API and public runtime.
+4. No-save campaign does not create a content archive, subject to auditable minimum delivery metadata retention.
+5. Email archive public opt-in, authorization and stripping of subscriber-specific data.
