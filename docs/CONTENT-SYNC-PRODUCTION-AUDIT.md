@@ -110,3 +110,12 @@ Tests planned: actual migration execution, repeat migration idempotency, schema 
 - Prepared **Phase 2G** with a two-stage script: `--check` only reads local prerequisites; `--run` explicitly creates a temporary Docker MySQL 8 test container using isolated random database credentials, private tmpfs storage, no production DB settings, and a dynamically mapped loopback-only TCP port; stops/removes container on exit. The Laravel app is not bootstrapped and the parent Post schema is synthetic. Requires Docker and adequate capacity; run on staging preferably.
 - Phase 2G source syntax and packaging checked locally. It has **not yet been run on VPS**, so no MySQL PASS is claimed.
 - Following MySQL results, the full real PublishingContentService upsert path, HTTP read endpoints / cross-tenant authorization, pagination and deleted/tags/translations feed, server compare-and-swap remain outstanding. Phase 2D production `--apply` stays disabled.
+
+
+## Phase 2G.2 real MySQL integration: 22/22 PASS (2026-10-10)
+
+The owner ran Phase 2G.2 on local Ubuntu with Docker MySQL **8.0.46**, no HakiSend app bootstrap and no production MySQL connection. Observed: `MYSQL_TCP_AUTH_QUERY=PASS`, `TESTS_PASSED=22`, `RESULT=ISOLATED_MYSQL_INTEGRATION_PASS`, `RESULT=PHASE2G_LOCAL_RUN_FINISHED`, `TEST_CONTAINER_REMOVED=YES`, `TEST_MYSQL_NETWORK_REMOVED=YES`, `PRODUCTION_CHANGED=NO`. The test covered actual MySQL migration, source-fidelity read/write via a **synthetic parent Posts schema**, Eloquent query behavior, idempotent source upsert, HTML-edit invalidation, rollback, unique constraints, FKs and cleanup.
+
+**Limit:** The test did *not* exercise the real `PublishingContentService::upsertPost()` or real HakiSend HTTP authentication/authorization, and cannot validate conflict-safe two-way writes. Next milestone Phase 2H must exercise the genuine service with realistic dependencies in a fully isolated environment and explicitly test whether a web-side modification can be overwritten by a subsequent Obsidian upsert. Neither source hash nor `updated_at` alone is a server-enforced compare-and-swap precondition.
+
+A narrow read-only source-collection helper `hakisend-ob-sync-phase2h-service-source-audit.sh` captures the required PublishingMarkdownRenderer, PublishingFrontmatterPolicy, PublishingTaxonomyService, SiteLocaleRegistry, PageHtmlGuard, and Site/Category/Page/Post/Tag models and migrations from production, without environment secrets or database rows. Phase 2D `--apply` stays disabled.
