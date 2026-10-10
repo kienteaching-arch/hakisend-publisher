@@ -17,9 +17,12 @@ interface HakiSendSite {
     excerpt_max_length?: number;
 }
 
+interface FolderSiteMapping { folderPath: string; siteUid: string; }
+
 interface HakiSendPublisherSettings {
     apiBaseUrl: string;
     defaultSiteUid: string;
+    folderSiteMappings: FolderSiteMapping[];
 
     /**
      * S5.3B legacy field.
@@ -461,6 +464,7 @@ function simpleSlug(
 const DEFAULT_SETTINGS: HakiSendPublisherSettings = {
     apiBaseUrl: "https://app.hakisend.com",
     defaultSiteUid: "",
+    folderSiteMappings: [],
     bearerToken: "",
     sites: [],
 };
@@ -476,6 +480,14 @@ const CONNECT_CALLBACK_ACTION =
 
 const PENDING_MAX_AGE_MS =
     30 * 60 * 1000;
+
+function normalizeFolderPath(value: string): string {
+    return value.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/");
+}
+
+function pathIsWithinFolder(path: string, folder: string): boolean {
+    return path === folder || path.startsWith(folder + "/");
+}
 
 function normalizeBaseUrl(value: string): string {
     const trimmed = value.trim();
@@ -1653,6 +1665,19 @@ export default class HakiSendPublisherPlugin
             sites: Array.isArray(stored.sites)
                 ? stored.sites
                 : [],
+            folderSiteMappings: Array.isArray(stored.folderSiteMappings)
+                ? stored.folderSiteMappings.filter((mapping: unknown): mapping is FolderSiteMapping => {
+                    if (!mapping || typeof mapping !== "object") return false;
+                    const candidate = mapping as Partial<FolderSiteMapping>;
+                    return typeof candidate.folderPath === "string"
+                        && !!normalizeFolderPath(candidate.folderPath)
+                        && typeof candidate.siteUid === "string"
+                        && !!candidate.siteUid.trim();
+                }).map((mapping: FolderSiteMapping) => ({
+                    folderPath: normalizeFolderPath(mapping.folderPath),
+                    siteUid: mapping.siteUid.trim(),
+                }))
+                : [],
         };
     }
 
@@ -2192,6 +2217,39 @@ export default class HakiSendPublisherPlugin
         return this.settings.sites;
     }
 
+
+    resolveSiteForFile(file: TFile, frontmatter: Record<string, unknown> = {}): string {
+        const explicit = [frontmatter.site_uid, frontmatter.site]
+            .find((value) => typeof value === "string" && !!value.trim());
+        if (typeof explicit === "string") {
+            const key = explicit.trim().toLowerCase();
+            const site = this.settings.sites.find((candidate) =>
+                candidate.uid.toLowerCase() === key
+                || (candidate.slug || "").toLowerCase() === key
+                || candidate.name.toLowerCase() === key
+            );
+            if (!site) throw new Error(`Site "${explicit}" in Properties is not accessible. Refresh HakiSend Sites.`);
+            return site.uid;
+        }
+        const routes = [...this.settings.folderSiteMappings]
+            .filter((route) => pathIsWithinFolder(file.path, route.folderPath))
+            .sort((a, b) => b.folderPath.length - a.folderPath.length);
+        if (routes.length) {
+            const uid = routes[0].siteUid;
+            if (!this.settings.sites.some((site) => site.uid === uid))
+                throw new Error(`Folder route "${routes[0].folderPath}" refers to an unavailable HakiSend Site.`);
+            return uid;
+        }
+        const fallback = this.settings.defaultSiteUid.trim();
+        if (!fallback) throw new Error("Choose a Default Site or configure Folder → Site routes.");
+        if (this.settings.sites.length && !this.settings.sites.some((site) => site.uid === fallback))
+            throw new Error("Default Site unavailable. Refresh HakiSend Sites.");
+        return fallback;
+    }
+
+    resolveSiteForFolder(folder: string): string {
+        return this.resolveSiteForFile({ path: normalizeFolderPath(folder) + "/_new.md" } as TFile);
+    }
 
     private async openPostProperties():
         Promise<void> {
