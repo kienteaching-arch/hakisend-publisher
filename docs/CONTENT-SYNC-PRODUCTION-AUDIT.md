@@ -9,6 +9,26 @@ Date: 2026-10-10. This is a design document, **not** a claim that the described 
 - Publishing is a separate Site operation.
 - Existing plugin does **not** import the remote Post body into the vault and does not have a known read-side Post list/detail contract.
 
+
+## Evidence from the first production read-only audit (2026-10-10)
+Source: owner-supplied terminal output from `/var/www/sites/hakisend.com/app`.
+- Runtime: PHP 8.3.33, Laravel 12.61.1.
+- Installed `hakisend/sites` plugin version: **0.15.3**.
+- Exact published integration route inventory: nine routes, including:
+  - `GET /api/v1/hakisend/sites`
+  - `GET /api/v1/hakisend/sites/{siteUid}`
+  - `GET /api/v1/hakisend/sites/{siteUid}/categories`
+  - `GET /api/v1/hakisend/sites/{siteUid}/tags`
+  - `PUT /api/v1/hakisend/sites/{siteUid}/posts/upsert`
+  - `PUT /api/v1/hakisend/sites/{siteUid}/pages/upsert`
+  - `POST /api/v1/hakisend/sites/{siteUid}/publish`
+  - `POST /api/v1/hakisend/media/assets`
+  - `POST /api/v1/hakisend/media/assets/resolve`
+- **There is no Post collection GET, single-Post detail/body GET, changes-since API or deletion/tombstone feed in this publishing API route inventory.** This does not imply the internal authenticated customer UI lacks Post reads.
+- Identified implementation: `PublishingContentController@upsertPost`, `CustomerSitePostsController`, `SitePost`, `SitePostTranslation`, authentication/scope middleware, external-content identity migration and Post schema migration.
+- **Next gate:** obtain a narrowly allowlisted archive of the above PHP *source files only* (no production DB data, `.env`, tokens, log files or Post bodies), inspect actual storage and authorization contracts, then design read-side API and optimistic concurrency.
+- Do not mutate production until an independent candidate patch passes unit/integration tests and release gates.
+
 ## Required evidence from production HakiSend
 1. Authenticated route listing for the actual Site Posts read API (GET list, GET detail/body, changes-since, deletions).
 2. Server code paths for controller, DTO/resource serialization, service, model, migration; verify that Markdown stored as authored can be returned without losing local links/featured media.
