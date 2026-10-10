@@ -1603,6 +1603,12 @@ export default class HakiSendPublisherPlugin
         });
 
         this.addCommand({
+            id: "select-note-site",
+            name: "HakiSend: Choose Site for this Note",
+            callback: () => this.openSelectSiteForNote(),
+        });
+
+        this.addCommand({
             id: "edit-post-properties",
             name: "HakiSend: Edit Post Properties",
             callback: async () => {
@@ -2251,6 +2257,50 @@ export default class HakiSendPublisherPlugin
         return this.resolveSiteForFile({ path: normalizeFolderPath(folder) + "/_new.md" } as TFile);
     }
 
+    private openSelectSiteForNote(): void {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension.toLowerCase() !== "md") {
+            new Notice("Open a Markdown note first.");
+            return;
+        }
+        const sites = this.settings.sites;
+        if (!sites.length) {
+            new Notice("Connect HakiSend and load available Sites first.");
+            return;
+        }
+        const initial = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+        const pinned = typeof initial.site_uid === "string" ? initial.site_uid : "";
+        const modal = new Modal(this.app);
+        modal.titleEl.setText("Choose HakiSend Site");
+        modal.contentEl.createEl("p", {
+            text: "Pin this note to one Site, or use its folder route. Changing Site after publishing may create a Post on the new Site.",
+        });
+        let chosen = pinned;
+        new Setting(modal.contentEl)
+            .setName("Publishing Site")
+            .addDropdown((dropdown) => {
+                dropdown.addOption("", "Use folder mapping / Default Site");
+                for (const site of sites) dropdown.addOption(site.uid, site.name);
+                dropdown.setValue(chosen);
+                dropdown.onChange((value) => { chosen = value; });
+            });
+        new Setting(modal.contentEl).addButton((button) => button
+            .setButtonText("Apply to Properties").setCta().onClick(async () => {
+                try {
+                    await this.app.fileManager.processFrontMatter(file, (data) => {
+                        delete data.site;
+                        if (chosen) data.site_uid = chosen;
+                        else delete data.site_uid;
+                    });
+                    modal.close();
+                    new Notice("Site saved locally. Review Category before publishing.");
+                } catch (error) {
+                    new Notice("Cannot set Site: " + this.safeErrorMessage(error));
+                }
+            }));
+        modal.open();
+    }
+
     private async openPostProperties():
         Promise<void> {
 
@@ -2280,16 +2330,8 @@ export default class HakiSendPublisherPlugin
                 );
             }
 
-            const siteUid =
-                this.settings
-                    .defaultSiteUid
-                    .trim();
-
-            if (!siteUid) {
-                throw new Error(
-                    "Choose a Default Site in HakiSend Publisher settings."
-                );
-            }
+            const siteUid = this.resolveSiteForFile(file,
+                this.app.metadataCache.getFileCache(file)?.frontmatter ?? {});
 
             const categories =
                 await this
@@ -2530,16 +2572,9 @@ export default class HakiSendPublisherPlugin
                 );
             }
 
-            const siteUid =
-                this.settings
-                    .defaultSiteUid
-                    .trim();
-
-            if (!siteUid) {
-                throw new Error(
-                    "Choose a Default Site in HakiSend Publisher settings."
-                );
-            }
+            const active = this.app.workspace.getActiveFile();
+            const destinationFolder = normalizeFolderPath(active?.parent?.path ?? "");
+            const siteUid = this.resolveSiteForFolder(destinationFolder);
 
             const categories =
                 await this
@@ -2553,22 +2588,6 @@ export default class HakiSendPublisherPlugin
                     "This Site has no Categories. Create a Category in HakiSend first."
                 );
             }
-
-            const active =
-                this.app.workspace
-                    .getActiveFile();
-
-            const destinationFolder =
-                (
-                    active
-                        ?.parent
-                        ?.path
-                    ?? ""
-                )
-                    .replace(
-                        /^\/+|\/+$/g,
-                        ""
-                    );
 
             const folderName =
                 active
@@ -2690,9 +2709,11 @@ export default class HakiSendPublisherPlugin
                 values.title
             );
 
+        const siteUid = this.resolveSiteForFolder(folderPath);
         const content =
             [
                 "---",
+                "site_uid: " + yamlQuotedScalar(siteUid),
                 "title: "
                     + yamlQuotedScalar(
                         values.title
@@ -3692,16 +3713,7 @@ export default class HakiSendPublisherPlugin
                             .trim()
                         : file.basename,
 
-                site:
-                    typeof frontmatter.site
-                        === "string"
-                        && frontmatter
-                            .site
-                            .trim()
-                        ? frontmatter
-                            .site
-                            .trim()
-                        : siteUid,
+                site: siteUid,
 
                 type: "post",
 
@@ -3899,17 +3911,6 @@ export default class HakiSendPublisherPlugin
             );
         }
 
-        const siteUid =
-            this.settings
-                .defaultSiteUid
-                .trim();
-
-        if (!siteUid) {
-            throw new Error(
-                "Choose a Default Site in HakiSend Publisher settings."
-            );
-        }
-
         const cached =
             this.app.metadataCache
                 .getFileCache(file);
@@ -3922,6 +3923,8 @@ export default class HakiSendPublisherPlugin
                         .frontmatter,
                 }
                 : {};
+
+        const siteUid = this.resolveSiteForFile(file, frontmatter);
 
         if (
             metadataOverrides
@@ -4602,7 +4605,15 @@ export default class HakiSendPublisherPlugin
             );
         }
 
+        let destination = "unresolved";
+        try {
+            const uid = this.resolveSiteForFile(file, frontmatter);
+            destination = this.settings.sites.find((site) => site.uid === uid)?.name ?? uid;
+        } catch (error) {
+            destination = this.safeErrorMessage(error);
+        }
         const lines = [
+            "Site: " + destination,
             "HakiSend local state: "
                 + state,
             "Category: "
@@ -4827,6 +4838,55 @@ class HakiSendPublisherSettingTab
 
         const sites =
             this.plugin.settings.sites;
+
+        containerEl.createEl("h3", { text: "Folder → Site publishing routes" });
+        containerEl.createEl("p", {
+            text: "Subfolders inherit the closest parent route. site_uid in note Properties overrides routes.",
+            cls: "setting-item-description",
+        });
+        for (const route of this.plugin.settings.folderSiteMappings) {
+            new Setting(containerEl)
+                .setName(route.folderPath)
+                .addDropdown((dropdown) => {
+                    for (const site of sites) dropdown.addOption(site.uid, site.name);
+                    dropdown.setValue(route.siteUid);
+                    dropdown.onChange(async (value) => {
+                        route.siteUid = value;
+                        await this.plugin.saveSettings();
+                    });
+                })
+                .addButton((button) => button.setButtonText("Remove").onClick(async () => {
+                    this.plugin.settings.folderSiteMappings = this.plugin.settings.folderSiteMappings.filter((item) => item !== route);
+                    await this.plugin.saveSettings();
+                    this.display();
+                }));
+        }
+        let newFolder = "";
+        let newSite = sites[0]?.uid ?? "";
+        new Setting(containerEl)
+            .setName("Add folder route")
+            .setDesc("Vault-relative folder, for example KIEN OS or Parenting/English.")
+            .addText((input) => input.setPlaceholder("Parenting/English").onChange((value) => { newFolder = value; }))
+            .addDropdown((dropdown) => {
+                for (const site of sites) dropdown.addOption(site.uid, site.name);
+                if (newSite) dropdown.setValue(newSite);
+                dropdown.onChange((value) => { newSite = value; });
+            })
+            .addButton((button) => button.setButtonText("Add route").onClick(async () => {
+                const folder = normalizeFolderPath(newFolder);
+                if (!folder || !newSite) {
+                    new Notice("Select a folder and a Site.");
+                    return;
+                }
+                if (!this.app.vault.getAbstractFileByPath(folder)) {
+                    new Notice("Create this Obsidian folder before mapping it.");
+                    return;
+                }
+                this.plugin.settings.folderSiteMappings = this.plugin.settings.folderSiteMappings.filter((item) => item.folderPath !== folder);
+                this.plugin.settings.folderSiteMappings.push({ folderPath: folder, siteUid: newSite });
+                await this.plugin.saveSettings();
+                this.display();
+            }));
 
         new Setting(containerEl)
             .setName("Default Site")
