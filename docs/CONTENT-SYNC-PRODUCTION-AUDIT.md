@@ -170,3 +170,10 @@ New standalone candidate `hakisend-sync-phase2j-managed-writers-candidate.tar.gz
 - **Remaining blockers:** AI/background translation writers; any Tag/category changes that affect state; public API 409 error mapping, read-side Posts API, full-schema HTTP authorization tests, simultaneous request race tests, source preservation, data deletion/restoration discipline. The actual web HTTP controllers/Blade rendering are not executed in isolated test. The candidate must NOT be deployed based on a static check or a service-only MySQL PASS.
 
 Phase 2J next user step: run the downloaded candidate's `bash run.sh --check` then `bash run.sh --run` on the isolated laptop Docker environment and share the complete result.
+
+
+## Phase 2J.1 integration harness migration-order fix (2026-10-10)
+
+Owner ran Phase 2J original Docker MySQL harness; it passed source migration and initial Post creation but stopped on `SQLSTATE[42S02] 1146: hakisend_site_post_sync_enrollments doesn't exist`. Direct source inspection established that the harness calls `PublishingManagedPostGuard::isEnrolled()` during the first Upsert but deferred applying the enrollment migration until near the end of the test. This is a **harness setup order bug**, not a demonstrated production schema defect.
+
+Created `hakisend-sync-phase2j1-managed-writers-migration-order-fix.tar.gz`: enrollment migration runs immediately after source migration and before first Upsert, with assertions for table creation and repeated-migration idempotency. No HakiSend PHP service/controller/Blade or database migration logic was changed. Local validation: PHP syntax all source files PASS, Bash syntax PASS, SHA256 checks 29 files PASS. **Not yet retested on Docker MySQL.** Production unchanged. The previous Phase 2J service/HTTP release limitations still apply.
