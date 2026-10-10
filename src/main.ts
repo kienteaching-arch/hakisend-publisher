@@ -18,11 +18,18 @@ interface HakiSendSite {
 }
 
 interface FolderSiteMapping { folderPath: string; siteUid: string; }
+interface FolderCategoryMapping {
+    folderPath: string;
+    siteUid: string;
+    categoryUid: string;
+    categoryTitle?: string;
+}
 
 interface HakiSendPublisherSettings {
     apiBaseUrl: string;
     defaultSiteUid: string;
     folderSiteMappings: FolderSiteMapping[];
+    folderCategoryMappings: FolderCategoryMapping[];
 
     /**
      * S5.3B legacy field.
@@ -465,6 +472,7 @@ const DEFAULT_SETTINGS: HakiSendPublisherSettings = {
     apiBaseUrl: "https://app.hakisend.com",
     defaultSiteUid: "",
     folderSiteMappings: [],
+    folderCategoryMappings: [],
     bearerToken: "",
     sites: [],
 };
@@ -1684,6 +1692,21 @@ export default class HakiSendPublisherPlugin
                     siteUid: mapping.siteUid.trim(),
                 }))
                 : [],
+            folderCategoryMappings: Array.isArray(stored.folderCategoryMappings)
+                ? stored.folderCategoryMappings.filter((mapping: unknown): mapping is FolderCategoryMapping => {
+                    if (!mapping || typeof mapping !== "object") return false;
+                    const candidate = mapping as Partial<FolderCategoryMapping>;
+                    return typeof candidate.folderPath === "string"
+                        && !!normalizeFolderPath(candidate.folderPath)
+                        && typeof candidate.siteUid === "string" && !!candidate.siteUid.trim()
+                        && typeof candidate.categoryUid === "string" && !!candidate.categoryUid.trim();
+                }).map((mapping: FolderCategoryMapping) => ({
+                    folderPath: normalizeFolderPath(mapping.folderPath),
+                    siteUid: mapping.siteUid.trim(),
+                    categoryUid: mapping.categoryUid.trim(),
+                    categoryTitle: typeof mapping.categoryTitle === "string" ? mapping.categoryTitle : undefined,
+                }))
+                : [],
         };
     }
 
@@ -2255,6 +2278,17 @@ export default class HakiSendPublisherPlugin
 
     resolveSiteForFolder(folder: string): string {
         return this.resolveSiteForFile({ path: normalizeFolderPath(folder) + "/_new.md" } as TFile);
+    }
+
+    private findCategoryRoute(filePath: string, siteUid: string): FolderCategoryMapping | null {
+        const routes = [...this.settings.folderCategoryMappings]
+            .filter((route) => pathIsWithinFolder(filePath, route.folderPath))
+            .sort((a, b) => b.folderPath.length - a.folderPath.length);
+        if (!routes.length) return null;
+        if (routes[0].siteUid !== siteUid) {
+            throw new Error(`Category folder "${routes[0].folderPath}" belongs to a different HakiSend Site. Review site_uid or the folder route.`);
+        }
+        return routes[0];
     }
 
     private openSelectSiteForNote(): void {
