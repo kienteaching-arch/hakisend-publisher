@@ -592,6 +592,16 @@ interface HakiSendPostPropertiesValues {
 interface HakiSendNewPostValues {
     title: string;
     category: HakiSendCategory;
+    siteUid: string;
+    folderPath: string;
+}
+
+interface HakiSendNewPostDestination {
+    folderPath: string;
+    siteUid: string;
+    siteName: string;
+    categories: HakiSendCategory[];
+    preferredCategoryUid: string;
 }
 
 function safeMarkdownBasename(
@@ -1109,227 +1119,175 @@ class HakiSendPostPropertiesModal
 }
 
 
-class HakiSendNewPostModal
-    extends Modal {
-
+class HakiSendNewPostModal extends Modal {
     private titleValue = "";
-
-    private categoryUid: string;
+    private categoryUid = "";
+    private destination: HakiSendNewPostDestination | null = null;
+    private loadSequence = 0;
+    private loading = false;
+    private submitting = false;
+    private folderSetting: Setting | null = null;
+    private siteSetting: Setting | null = null;
+    private categorySetting: Setting | null = null;
 
     constructor(
         app: App,
-        private categories:
-            HakiSendCategory[],
-        initialCategoryUid: string,
-        private destinationFolder:
-            string,
-        private onSubmit:
-            (
-                values:
-                    HakiSendNewPostValues
-            ) => Promise<void>
+        private readonly initialFolder: string,
+        private readonly resolveFolder:
+            (folder: string) => Promise<HakiSendNewPostDestination>,
+        private readonly onSubmit:
+            (values: HakiSendNewPostValues) => Promise<void>
     ) {
         super(app);
-
-        this.categoryUid =
-            initialCategoryUid;
     }
 
     onOpen(): void {
-        const {
-            contentEl,
-        } = this;
-
+        const { contentEl } = this;
         contentEl.empty();
+        contentEl.createEl("h2", { text: "New HakiSend Post" });
+        contentEl.createEl("p", {
+            text: "Choose a destination folder. HakiSend Site and Category are resolved automatically. Creating a local draft does not publish it.",
+        });
 
-        contentEl.createEl(
-            "h2",
-            {
-                text:
-                    "New HakiSend Post",
-            }
-        );
+        this.folderSetting = new Setting(contentEl)
+            .setName("Obsidian folder")
+            .setDesc("Select a folder in this vault.");
+        this.folderSetting.addButton((button) => button
+            .setButtonText("Choose folder…")
+            .onClick(() => {
+                new HakiSendFolderPicker(this.app, (folder) => {
+                    void this.loadFolder(folder.path);
+                }).open();
+            }));
 
-        contentEl.createEl(
-            "p",
-            {
-                text:
-                    "Create a local draft with stable HakiSend identity. Nothing is sent to HakiSend until you Save, Schedule, or Publish.",
-            }
-        );
+        this.siteSetting = new Setting(contentEl)
+            .setName("HakiSend Site")
+            .setDesc("Choose a folder to resolve the Site.");
 
-        contentEl.createEl(
-            "p",
-            {
-                text:
-                    "Folder: "
-                    + (
-                        this.destinationFolder
-                        || "Vault root"
-                    ),
-            }
-        );
-
-        new Setting(
-            contentEl
-        )
+        new Setting(contentEl)
             .setName("Title")
-            .setDesc(
-                "Used for the note filename and initial Post title."
-            )
-            .addText(
-                (text) => {
-                    text
-                        .setPlaceholder(
-                            "Post title"
-                        )
-                        .onChange(
-                            (
-                                value
-                            ) => {
-                                this.titleValue =
-                                    value;
-                            }
-                        );
-
-                    text.inputEl
-                        .addEventListener(
-                            "keydown",
-                            (
-                                event
-                            ) => {
-                                if (
-                                    event.key
-                                    !== "Enter"
-                                ) {
-                                    return;
-                                }
-
-                                event.preventDefault();
-
-                                void this.submit();
-                            }
-                        );
-
-                    window.setTimeout(
-                        () => {
-                            text.inputEl
-                                .focus();
-                        },
-                        0
-                    );
-                }
-            );
-
-        new Setting(
-            contentEl
-        )
-            .setName("Category")
-            .setDesc(
-                "The category is stored explicitly in Properties, so moving the note later does not change it."
-            )
-            .addDropdown(
-                (dropdown) => {
-                    for (
-                        const category
-                        of this.categories
-                    ) {
-                        dropdown
-                            .addOption(
-                                category.uid,
-                                `${category.title} (${category.slug})`
-                            );
+            .setDesc("Used as the filename and initial Post title.")
+            .addText((input) => {
+                input.setPlaceholder("Post title");
+                input.onChange((value) => { this.titleValue = value; });
+                input.inputEl.addEventListener("keydown", (event) => {
+                    if (event.key === "Enter") {
+                        event.preventDefault();
+                        void this.submit();
                     }
+                });
+                window.setTimeout(() => input.inputEl.focus(), 0);
+            });
 
-                    dropdown
-                        .setValue(
-                            this.categoryUid
-                        )
-                        .onChange(
-                            (
-                                value
-                            ) => {
-                                this.categoryUid =
-                                    value;
-                            }
-                        );
-                }
-            );
+        this.categorySetting = new Setting(contentEl)
+            .setName("Category")
+            .setDesc("Choose a folder to load this Site's Categories.");
 
-        new Setting(
-            contentEl
-        )
-            .addButton(
-                (button) => {
-                    button
-                        .setButtonText(
-                            "Cancel"
-                        )
-                        .onClick(
-                            () => {
-                                this.close();
-                            }
-                        );
-                }
-            )
-            .addButton(
-                (button) => {
-                    button
-                        .setButtonText(
-                            "Create draft"
-                        )
-                        .setCta()
-                        .onClick(
-                            async () => {
-                                await this.submit();
-                            }
-                        );
-                }
-            );
+        new Setting(contentEl)
+            .addButton((button) => button.setButtonText("Cancel")
+                .onClick(() => this.close()))
+            .addButton((button) => button.setButtonText("Create draft").setCta()
+                .onClick(() => { void this.submit(); }));
+
+        const initial = normalizeFolderPath(this.initialFolder);
+        if (initial) {
+            void this.loadFolder(initial);
+        } else {
+            this.folderSetting.setDesc("No folder selected. Use Choose folder to continue.");
+        }
     }
 
-    private async submit():
-        Promise<void> {
+    private async loadFolder(path: string): Promise<void> {
+        const seq = ++this.loadSequence;
+        const normalized = normalizeFolderPath(path);
+        this.loading = true;
+        this.destination = null;
+        this.categoryUid = "";
 
-        const title =
-            this.titleValue
-                .trim();
-
-        if (!title) {
-            new Notice(
-                "Enter a title for the new HakiSend Post."
-            );
-
-            return;
+        this.folderSetting?.setDesc(normalized || "No folder selected");
+        this.siteSetting?.setDesc("Resolving Site...");
+        if (this.categorySetting) {
+            this.categorySetting.controlEl.empty();
+            this.categorySetting.setDesc("Loading Categories for this folder...");
         }
 
-        const category =
-            this.categories
-                .find(
-                    (
-                        item
-                    ) =>
-                        item.uid
-                        === this.categoryUid
+        try {
+            const resolved = await this.resolveFolder(normalized);
+            if (seq !== this.loadSequence) return;
+            this.destination = resolved;
+            this.categoryUid = resolved.preferredCategoryUid;
+            this.siteSetting?.setDesc(resolved.siteName);
+            this.folderSetting?.setDesc(resolved.folderPath);
+            if (this.categorySetting) {
+                this.categorySetting.setDesc(
+                    this.categoryUid
+                        ? "Detected from the nearest folder mapping. You can choose a different Category."
+                        : "Choose the Category for the selected Site."
                 );
+                this.categorySetting.addDropdown((dropdown) => {
+                    dropdown.addOption("", "Choose a Category");
+                    for (const item of resolved.categories) {
+                        dropdown.addOption(item.uid, `${item.title} (${item.slug})`);
+                    }
+                    dropdown.setValue(this.categoryUid);
+                    dropdown.onChange((value) => {
+                        this.categoryUid = value;
+                    });
+                });
+            }
+        } catch (error) {
+            if (seq !== this.loadSequence) return;
+            const message = error instanceof Error ? error.message : String(error);
+            this.siteSetting?.setDesc("Cannot resolve Site: " + message);
+            this.categorySetting?.setDesc("Choose a valid folder to continue.");
+        } finally {
+            if (seq === this.loadSequence) this.loading = false;
+        }
+    }
 
-        if (!category) {
-            new Notice(
-                "Choose a HakiSend Category."
-            );
-
+    private async submit(): Promise<void> {
+        if (this.submitting) return;
+        if (this.loading) {
+            new Notice("Wait for the Site and Category to finish loading.");
+            return;
+        }
+        const title = this.titleValue.trim();
+        if (!title) {
+            new Notice("Enter a title for the new HakiSend Post.");
             return;
         }
 
-        this.close();
+        const selected = this.destination;
+        if (!selected) {
+            new Notice("Choose a valid Obsidian folder with an accessible HakiSend Site.");
+            return;
+        }
 
-        await this.onSubmit({
-            title,
-            category,
-        });
+        const category = selected.categories.find((item) => item.uid === this.categoryUid);
+        if (!category) {
+            new Notice("Choose a Category from the selected HakiSend Site.");
+            return;
+        }
+
+        this.submitting = true;
+        try {
+            await this.onSubmit({
+                title,
+                category,
+                siteUid: selected.siteUid,
+                folderPath: selected.folderPath,
+            });
+            this.close();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            new Notice("HakiSend New Post failed: " + message);
+        } finally {
+            this.submitting = false;
+        }
     }
 
     onClose(): void {
+        this.loadSequence++;
         this.contentEl.empty();
     }
 }
