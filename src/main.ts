@@ -32,7 +32,7 @@ class HakiSendFolderPicker extends FuzzySuggestModal<TFolder> {
     getItems(): TFolder[] {
         return this.app.vault.getAllLoadedFiles()
             .filter((item): item is TFolder =>
-                item instanceof TFolder && item.path.length > 0
+                item instanceof TFolder && item.path.length > 0 && item.path !== "/"
             )
             .sort((left, right) => left.path.localeCompare(right.path));
     }
