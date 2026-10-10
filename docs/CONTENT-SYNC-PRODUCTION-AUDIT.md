@@ -232,3 +232,10 @@ Prepared Phase 2M candidate hakisend-sync-phase2m-isolated-http-auth-tests.tar.g
 Scope limit: this is a local Illuminate Router/request/response integration, NOT a boot of the production HakiSend application kernel, real externally served HTTP, original hardening middleware rate limit/audit/error translation, or full customer subscription entitlement policy. This package passed local php -l for 39 PHP files, bash -n, and 43 file SHA256 checks, but Phase 2M MySQL HAS NOT yet run. Nothing was deployed; preview routes remain candidate only.
 
 Release blockers: full authenticated HakiSend application/kernel and production plugin route tests, migration rollback, sync change-feed, actual queue/hardening, version locking all writers, and an Obsidian preview/import UI. Start with read-only preview/import release; no bidirectional auto-merge.
+
+
+## Phase 2M.1 isolated Router harness fix (2026-10-10)
+
+Owner ran Phase 2M on isolated Docker MySQL. Read-service assertions passed, including safe Markdown, HTML fallback, pagination, Site isolation and deletion. **Before any HTTP-specific PASS**, the first synthetic Illuminate Router dispatch threw bare Symfony HttpException. The isolated runner did not bind the current \`Illuminate\Http\Request\` instance into the Container as the real Laravel HTTP Kernel does; controller dependency injection could therefore see a fresh Request with no auth/customer attributes, and its \`abort_unless\` would reject it. This is a **harness hypothesis/diagnosis, not evidence of a production auth defect**.
+
+Prepared Phase 2M.1 \`hakisend-sync-phase2m1-http-request-binding-fix.tar.gz\`: before each synthetic dispatch bind the same Request to both the \`request\` Container key and Request class; add exception status/class diagnostics only, without printing tokens. No business code, controller, auth middleware, migrations, database schemas or production files changed. PHP syntax, Bash syntax, SHA256 manifest, archive readability passed locally. **Docker MySQL Phase 2M.1 has not yet run; do not claim it passed**. The harness still isn't a full Laravel production HTTP Kernel integration.
