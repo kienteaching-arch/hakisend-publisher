@@ -1,5 +1,7 @@
 import { Modal,
     App,
+    FuzzySuggestModal,
+    DropdownComponent,
     Notice,
     Plugin,
     PluginSettingTab,
@@ -8,6 +10,41 @@ import { Modal,
     TFolder,
     requestUrl,
 } from "obsidian";
+
+/**
+ * Fuzzy search across existing folders. Searching by path is more reliable
+ * than typing a folder by hand, and works in desktop and mobile Obsidian.
+ */
+class HakiSendFolderPicker extends FuzzySuggestModal<TFolder> {
+    constructor(
+        app: App,
+        private readonly onChooseFolder: (folder: TFolder) => void
+    ) {
+        super(app);
+        this.setPlaceholder("Search Obsidian folders by name or path...");
+        this.setInstructions([
+            { command: "↑↓", purpose: "Navigate" },
+            { command: "↵", purpose: "Choose folder" },
+            { command: "esc", purpose: "Cancel" },
+        ]);
+    }
+
+    getItems(): TFolder[] {
+        return this.app.vault.getAllLoadedFiles()
+            .filter((item): item is TFolder =>
+                item instanceof TFolder && item.path.length > 0
+            )
+            .sort((left, right) => left.path.localeCompare(right.path));
+    }
+
+    getItemText(folder: TFolder): string {
+        return folder.path;
+    }
+
+    onChooseItem(folder: TFolder): void {
+        this.onChooseFolder(folder);
+    }
+}
 
 interface HakiSendSite {
     uid: string;
@@ -2308,13 +2345,29 @@ export default class HakiSendPublisherPlugin
         let categoryUid = "";
         let loadedCategories: HakiSendCategory[] = [];
         let loadSequence = 0;
+        let siteDropdown: DropdownComponent | null = null;
 
-        new Setting(modal.contentEl)
+        const folderSetting = new Setting(modal.contentEl)
             .setName("Obsidian folder")
-            .setDesc("Existing vault-relative Category folder, such as KIEN OS/Parenting.")
-            .addText((input) => input
-                .setPlaceholder("KIEN OS/Parenting")
-                .onChange((value) => { folderPath = value; }));
+            .setDesc("No folder selected. Search the folders in this vault.");
+        folderSetting.addButton((button) => button
+            .setButtonText("Choose folder…")
+            .onClick(() => {
+                new HakiSendFolderPicker(this.app, (folder) => {
+                    folderPath = folder.path;
+                    folderSetting.setDesc(folderPath);
+                    try {
+                        const routedSite = this.resolveSiteForFolder(folder.path);
+                        if (routedSite !== siteUid) {
+                            siteUid = routedSite;
+                            siteDropdown?.setValue(siteUid);
+                            void reloadCategories();
+                        }
+                    } catch (error) {
+                        folderSetting.setDesc(folderPath + " · " + this.safeErrorMessage(error));
+                    }
+                }).open();
+            }));
 
         const categorySetting = new Setting(modal.contentEl)
             .setName("Category")
@@ -2350,7 +2403,9 @@ export default class HakiSendPublisherPlugin
 
         new Setting(modal.contentEl)
             .setName("Site")
+            .setDesc("Selected automatically from the folder's Site route.")
             .addDropdown((dropdown) => {
+                siteDropdown = dropdown;
                 for (const site of sites) dropdown.addOption(site.uid, site.name);
                 dropdown.setValue(siteUid);
                 dropdown.onChange((value) => {
@@ -4990,10 +5045,15 @@ class HakiSendPublisherSettingTab
         }
         let newFolder = "";
         let newSite = sites[0]?.uid ?? "";
-        new Setting(containerEl)
+        const newRouteSetting = new Setting(containerEl)
             .setName("Add folder route")
-            .setDesc("Vault-relative folder, for example KIEN OS or Parenting/English.")
-            .addText((input) => input.setPlaceholder("Parenting/English").onChange((value) => { newFolder = value; }))
+            .setDesc("Choose an existing Obsidian folder.");
+        newRouteSetting
+            .addButton((button) => button.setButtonText("Choose folder…")
+                .onClick(() => new HakiSendFolderPicker(this.app, (folder) => {
+                    newFolder = folder.path;
+                    newRouteSetting.setDesc(folder.path);
+                }).open()))
             .addDropdown((dropdown) => {
                 for (const site of sites) dropdown.addOption(site.uid, site.name);
                 if (newSite) dropdown.setValue(newSite);
@@ -5005,8 +5065,9 @@ class HakiSendPublisherSettingTab
                     new Notice("Select a folder and a Site.");
                     return;
                 }
-                if (!this.app.vault.getAbstractFileByPath(folder)) {
-                    new Notice("Create this Obsidian folder before mapping it.");
+                const target = this.app.vault.getAbstractFileByPath(folder);
+                if (!target || !(target instanceof TFolder)) {
+                    new Notice("Choose a valid folder from this Obsidian vault.");
                     return;
                 }
                 this.plugin.settings.folderSiteMappings = this.plugin.settings.folderSiteMappings.filter((item) => item.folderPath !== folder);
