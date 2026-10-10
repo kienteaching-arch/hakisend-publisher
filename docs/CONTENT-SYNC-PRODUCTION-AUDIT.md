@@ -201,3 +201,16 @@ A **Phase 2K isolated MySQL candidate** `hakisend-sync-phase2k-async-translation
 Static checks on the candidate passed: 35 PHP files syntax-checked with PHP CLI, Bash syntax PASS, 39 SHA-256 manifest entries PASS. **Docker MySQL runtime not yet run for Phase 2K; do not claim 2K PASS.** User is to run `--check` and `--run` locally on Ubuntu and share output. There is no production deployment or migration in Phase 2K.
 
 Next release blockers remain: true queue/AI/billing transactional integration; `markStaleForSite` and other Post writer paths; authenticated HTTP 409/401/403 and cross-tenant tests; read-side Posts API/changes feed; full schema migration/release+rollback verification; mobile touch-first and email campaign workflows remain future development.
+
+
+## Phase 2K 58/58 PASS and Phase 2L read-preview candidate (2026-10-10)
+
+The owner executed the isolated Docker MySQL Phase 2K candidate: `TESTS_PASSED=58`, `RESULT=ASYNC_GUARDED_MYSQL_TEST_PASS_WITH_RELEASE_BLOCKERS`, `PRODUCTION_CHANGED=NO`, and temporary MySQL container/network were removed. Fresh async translations succeeded; stale success and failure markers after changes to Post, Tags, Translations, or managed enrollment were rejected. The test did **not** run real AI provider or Laravel queue/billing and reported `APP_HTTP_ROUTING_TESTED=NO` and `GLOBAL_CONFLICT_SAFE_TWO_WAY_SYNC=NO`.
+
+To prioritize a usable **HakiSend → Obsidian preview/import** before two-way sync, Phase 2L test candidate was prepared outside this GitHub repository as `hakisend-sync-phase2l-read-preview-mysql-tests.tar.gz` (SHA-256 `c03f124aead98f1f53d99a549e6ebc86c5043990cc45f901743bdb9ab6ff85dd`). Its additive read routes are:
+- `GET /api/v1/hakisend/sites/{siteUid}/posts` — metadata-only, bounded (limit 1–100) paginated bootstrap scan with per-Site maximum ID captured in cursor. Not a complete immutable snapshot or incremental feed.
+- `GET /api/v1/hakisend/sites/{siteUid}/posts/{postUid}` — same-Site detail; verified original Markdown if source provenance is intact, or explicitly HTML/read-only if source is missing/diverged, plus a canonical state token for later controlled use.
+
+The candidate applies **existing** PublishingApiHardening, PublishingApiAuthenticate and `content:read` scope middleware; the read controller also restricts customer ownership and entitlement. Read service integration tests on isolated MySQL cover pagination and fixed high-water ID, tenant-scoped queries and cursors, invalid cursors, faithful Markdown, HTML fallback, deleted Post exclusion and state token. Phase 2K prior service tests are retained.
+
+**Status:** package PHP/Bash syntax and SHA256 checks passed locally (41 files). **Phase 2L MySQL integration has NOT yet been run**; full HTTP 401/403/404 and cross-tenant token authorization still require a live isolated Laravel HTTP harness. Neither read endpoint is deployed. Source-provenance and state-token migrations are not present in production. There is no run.sh --apply. The Posts `/changes` API remains deferred until a reliable change/event journal covers Post, Tag, Translation, soft deletion/restoration, including updates in the same clock second. No publication, email, or write API modification from Phase 2L.
