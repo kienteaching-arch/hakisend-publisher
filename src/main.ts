@@ -2471,24 +2471,31 @@ export default class HakiSendPublisherPlugin
                     requestedCategory
                 );
 
-            const selectedCategory =
-                categories.find(
-                    (
-                        category
-                    ) =>
-                        category.uid
-                            === requestedCategory
-                        || category.slug
-                            .toLowerCase()
-                            === lowered
-                        || category.title
-                            .toLowerCase()
-                            === lowered
-                        || category.slug
-                            .toLowerCase()
-                            === slugged
-                )
-                ?? categories[0];
+            const categoryRoute = this.findCategoryRoute(file.path, siteUid);
+            const pinnedCategoryUid = typeof frontmatter.category_uid === "string"
+                ? frontmatter.category_uid.trim() : "";
+            const pinnedCategory = pinnedCategoryUid
+                ? categories.find((item) => item.uid === pinnedCategoryUid)
+                : null;
+            if (pinnedCategoryUid && !pinnedCategory)
+                throw new Error("This note's category_uid does not belong to its current Site. Choose a new Category for the Site.");
+
+            const manualCategory = categories.find((category) =>
+                category.uid === requestedCategory
+                || category.slug.toLowerCase() === lowered
+                || category.title.toLowerCase() === lowered
+                || category.slug.toLowerCase() === slugged
+            );
+            if (configuredCategory && !manualCategory && !pinnedCategory)
+                throw new Error("This note's Category does not belong to its current Site. Update its category in Properties.");
+            const mappedCategory = categoryRoute
+                ? categories.find((item) => item.uid === categoryRoute.categoryUid)
+                : null;
+            if (categoryRoute && !mappedCategory)
+                throw new Error("Mapped Category no longer exists on this Site. Update the Category folder mapping.");
+
+            const selectedCategory = pinnedCategory ?? manualCategory
+                ?? mappedCategory ?? categories[0];
 
             new HakiSendPostPropertiesModal(
                 this.app,
@@ -2542,6 +2549,7 @@ export default class HakiSendPublisherPlugin
                         values
                             .category
                             .slug;
+                    data.category_uid = values.category.uid;
 
                     if (
                         values.slug
@@ -2639,22 +2647,15 @@ export default class HakiSendPublisherPlugin
                     folderName
                 );
 
-            const preferred =
-                categories.find(
-                    (
-                        category
-                    ) =>
-                        category.title
-                            .toLowerCase()
-                            === lowered
-                        || category.slug
-                            .toLowerCase()
-                            === lowered
-                        || category.slug
-                            .toLowerCase()
-                            === folderSlug
-                )
-                ?? categories[0];
+            const route = this.findCategoryRoute(destinationFolder + "/_new.md", siteUid);
+            const mapped = route ? categories.find((category) => category.uid === route.categoryUid) : null;
+            if (route && !mapped)
+                throw new Error("Mapped Category is no longer accessible on this Site. Update the folder's Category route.");
+            const preferred = mapped ?? categories.find((category) =>
+                category.title.toLowerCase() === lowered
+                || category.slug.toLowerCase() === lowered
+                || category.slug.toLowerCase() === folderSlug
+            ) ?? categories[0];
 
             new HakiSendNewPostModal(
                 this.app,
@@ -2759,6 +2760,7 @@ export default class HakiSendPublisherPlugin
                             .category
                             .slug
                     ),
+                "category_uid: " + yamlQuotedScalar(values.category.uid),
                 "external_id: "
                     + externalId,
                 "---",
@@ -3664,61 +3666,41 @@ export default class HakiSendPublisherPlugin
                 token
             );
 
-        const configured =
-            typeof frontmatter.category
-                === "string"
-                ? frontmatter
-                    .category
-                    .trim()
-                : "";
+        const categoryRoute = this.findCategoryRoute(file.path, siteUid);
+        const pinnedUid = typeof frontmatter.category_uid === "string"
+            ? frontmatter.category_uid.trim() : "";
+        const explicitCategory = typeof frontmatter.category === "string"
+            ? frontmatter.category.trim() : "";
 
-        const folderFallback =
-            file.parent?.name?.trim()
-            ?? "";
-
-        const requested =
-            configured
-            || folderFallback;
-
-        if (!requested) {
-            throw new Error(
-                "A Category is required. Add category: <slug> to frontmatter."
+        let category: HakiSendCategory | undefined;
+        if (pinnedUid) {
+            category = categories.find((item) => item.uid === pinnedUid);
+            if (!category) throw new Error("category_uid does not belong to the selected Site. Choose a Category for this Site.");
+        } else if (explicitCategory) {
+            const key = explicitCategory.toLowerCase();
+            const slugged = simpleSlug(explicitCategory);
+            category = categories.find((item) =>
+                item.uid === explicitCategory
+                || item.slug.toLowerCase() === key
+                || item.title.toLowerCase() === key
+                || item.slug.toLowerCase() === slugged
             );
-        }
-
-        const lowered =
-            requested.toLowerCase();
-
-        const slugged =
-            simpleSlug(requested);
-
-        const category =
-            categories.find(
-                (item) =>
-                    item.uid
-                        === requested
-                    || item.slug
-                        .toLowerCase()
-                        === lowered
-                    || item.title
-                        .toLowerCase()
-                        === lowered
-                    || item.slug
-                        .toLowerCase()
-                        === slugged
+            if (!category) throw new Error(`Category "${explicitCategory}" does not exist on this Site.`);
+        } else if (categoryRoute) {
+            category = categories.find((item) => item.uid === categoryRoute.categoryUid);
+            if (!category) throw new Error("The mapped Category is no longer available on the selected Site.");
+        } else {
+            const folderName = file.parent?.name?.trim() ?? "";
+            const key = folderName.toLowerCase();
+            const slugged = simpleSlug(folderName);
+            category = categories.find((item) =>
+                item.uid === folderName
+                || item.slug.toLowerCase() === key
+                || item.title.toLowerCase() === key
+                || item.slug.toLowerCase() === slugged
             );
-
-        if (!category) {
-            const available =
-                categories
-                    .map(
-                        (item) =>
-                            `${item.title} (${item.slug})`
-                    )
-                    .join(", ");
-
-            throw new Error(
-                `Category "${requested}" does not exist in this Site. Available: ${available}`
+            if (!category) throw new Error(
+                `No Category assigned for folder "${file.parent?.path ?? ""}". Set category_uid, choose a Category in Properties or configure a Category folder mapping.`
             );
         }
 
