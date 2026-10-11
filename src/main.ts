@@ -1,12 +1,50 @@
 import { Modal,
     App,
+    FuzzySuggestModal,
+    DropdownComponent,
     Notice,
     Plugin,
     PluginSettingTab,
     Setting,
     TFile,
+    TFolder,
     requestUrl,
 } from "obsidian";
+
+/**
+ * Fuzzy search across existing folders. Searching by path is more reliable
+ * than typing a folder by hand, and works in desktop and mobile Obsidian.
+ */
+class HakiSendFolderPicker extends FuzzySuggestModal<TFolder> {
+    constructor(
+        app: App,
+        private readonly onChooseFolder: (folder: TFolder) => void
+    ) {
+        super(app);
+        this.setPlaceholder("Search Obsidian folders by name or path...");
+        this.setInstructions([
+            { command: "↑↓", purpose: "Navigate" },
+            { command: "↵", purpose: "Choose folder" },
+            { command: "esc", purpose: "Cancel" },
+        ]);
+    }
+
+    getItems(): TFolder[] {
+        return this.app.vault.getAllLoadedFiles()
+            .filter((item): item is TFolder =>
+                item instanceof TFolder && item.path.length > 0 && item.path !== "/"
+            )
+            .sort((left, right) => left.path.localeCompare(right.path));
+    }
+
+    getItemText(folder: TFolder): string {
+        return folder.path;
+    }
+
+    onChooseItem(folder: TFolder): void {
+        this.onChooseFolder(folder);
+    }
+}
 
 interface HakiSendSite {
     uid: string;
@@ -17,9 +55,19 @@ interface HakiSendSite {
     excerpt_max_length?: number;
 }
 
+interface FolderSiteMapping { folderPath: string; siteUid: string; }
+interface FolderCategoryMapping {
+    folderPath: string;
+    siteUid: string;
+    categoryUid: string;
+    categoryTitle?: string;
+}
+
 interface HakiSendPublisherSettings {
     apiBaseUrl: string;
     defaultSiteUid: string;
+    folderSiteMappings: FolderSiteMapping[];
+    folderCategoryMappings: FolderCategoryMapping[];
 
     /**
      * S5.3B legacy field.
@@ -461,6 +509,8 @@ function simpleSlug(
 const DEFAULT_SETTINGS: HakiSendPublisherSettings = {
     apiBaseUrl: "https://app.hakisend.com",
     defaultSiteUid: "",
+    folderSiteMappings: [],
+    folderCategoryMappings: [],
     bearerToken: "",
     sites: [],
 };
@@ -476,6 +526,14 @@ const CONNECT_CALLBACK_ACTION =
 
 const PENDING_MAX_AGE_MS =
     30 * 60 * 1000;
+
+function normalizeFolderPath(value: string): string {
+    return value.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/");
+}
+
+function pathIsWithinFolder(path: string, folder: string): boolean {
+    return path === folder || path.startsWith(folder + "/");
+}
 
 function normalizeBaseUrl(value: string): string {
     const trimmed = value.trim();
@@ -534,6 +592,16 @@ interface HakiSendPostPropertiesValues {
 interface HakiSendNewPostValues {
     title: string;
     category: HakiSendCategory;
+    siteUid: string;
+    folderPath: string;
+}
+
+interface HakiSendNewPostDestination {
+    folderPath: string;
+    siteUid: string;
+    siteName: string;
+    categories: HakiSendCategory[];
+    preferredCategoryUid: string;
 }
 
 function safeMarkdownBasename(
@@ -1051,227 +1119,175 @@ class HakiSendPostPropertiesModal
 }
 
 
-class HakiSendNewPostModal
-    extends Modal {
-
+class HakiSendNewPostModal extends Modal {
     private titleValue = "";
-
-    private categoryUid: string;
+    private categoryUid = "";
+    private destination: HakiSendNewPostDestination | null = null;
+    private loadSequence = 0;
+    private loading = false;
+    private submitting = false;
+    private folderSetting: Setting | null = null;
+    private siteSetting: Setting | null = null;
+    private categorySetting: Setting | null = null;
 
     constructor(
         app: App,
-        private categories:
-            HakiSendCategory[],
-        initialCategoryUid: string,
-        private destinationFolder:
-            string,
-        private onSubmit:
-            (
-                values:
-                    HakiSendNewPostValues
-            ) => Promise<void>
+        private readonly initialFolder: string,
+        private readonly resolveFolder:
+            (folder: string) => Promise<HakiSendNewPostDestination>,
+        private readonly onSubmit:
+            (values: HakiSendNewPostValues) => Promise<void>
     ) {
         super(app);
-
-        this.categoryUid =
-            initialCategoryUid;
     }
 
     onOpen(): void {
-        const {
-            contentEl,
-        } = this;
-
+        const { contentEl } = this;
         contentEl.empty();
+        contentEl.createEl("h2", { text: "New HakiSend Post" });
+        contentEl.createEl("p", {
+            text: "Choose a destination folder. HakiSend Site and Category are resolved automatically. Creating a local draft does not publish it.",
+        });
 
-        contentEl.createEl(
-            "h2",
-            {
-                text:
-                    "New HakiSend Post",
-            }
-        );
+        this.folderSetting = new Setting(contentEl)
+            .setName("Obsidian folder")
+            .setDesc("Select a folder in this vault.");
+        this.folderSetting.addButton((button) => button
+            .setButtonText("Choose folder…")
+            .onClick(() => {
+                new HakiSendFolderPicker(this.app, (folder) => {
+                    void this.loadFolder(folder.path);
+                }).open();
+            }));
 
-        contentEl.createEl(
-            "p",
-            {
-                text:
-                    "Create a local draft with stable HakiSend identity. Nothing is sent to HakiSend until you Save, Schedule, or Publish.",
-            }
-        );
+        this.siteSetting = new Setting(contentEl)
+            .setName("HakiSend Site")
+            .setDesc("Choose a folder to resolve the Site.");
 
-        contentEl.createEl(
-            "p",
-            {
-                text:
-                    "Folder: "
-                    + (
-                        this.destinationFolder
-                        || "Vault root"
-                    ),
-            }
-        );
-
-        new Setting(
-            contentEl
-        )
+        new Setting(contentEl)
             .setName("Title")
-            .setDesc(
-                "Used for the note filename and initial Post title."
-            )
-            .addText(
-                (text) => {
-                    text
-                        .setPlaceholder(
-                            "Post title"
-                        )
-                        .onChange(
-                            (
-                                value
-                            ) => {
-                                this.titleValue =
-                                    value;
-                            }
-                        );
-
-                    text.inputEl
-                        .addEventListener(
-                            "keydown",
-                            (
-                                event
-                            ) => {
-                                if (
-                                    event.key
-                                    !== "Enter"
-                                ) {
-                                    return;
-                                }
-
-                                event.preventDefault();
-
-                                void this.submit();
-                            }
-                        );
-
-                    window.setTimeout(
-                        () => {
-                            text.inputEl
-                                .focus();
-                        },
-                        0
-                    );
-                }
-            );
-
-        new Setting(
-            contentEl
-        )
-            .setName("Category")
-            .setDesc(
-                "The category is stored explicitly in Properties, so moving the note later does not change it."
-            )
-            .addDropdown(
-                (dropdown) => {
-                    for (
-                        const category
-                        of this.categories
-                    ) {
-                        dropdown
-                            .addOption(
-                                category.uid,
-                                `${category.title} (${category.slug})`
-                            );
+            .setDesc("Used as the filename and initial Post title.")
+            .addText((input) => {
+                input.setPlaceholder("Post title");
+                input.onChange((value) => { this.titleValue = value; });
+                input.inputEl.addEventListener("keydown", (event) => {
+                    if (event.key === "Enter") {
+                        event.preventDefault();
+                        void this.submit();
                     }
+                });
+                window.setTimeout(() => input.inputEl.focus(), 0);
+            });
 
-                    dropdown
-                        .setValue(
-                            this.categoryUid
-                        )
-                        .onChange(
-                            (
-                                value
-                            ) => {
-                                this.categoryUid =
-                                    value;
-                            }
-                        );
-                }
-            );
+        this.categorySetting = new Setting(contentEl)
+            .setName("Category")
+            .setDesc("Choose a folder to load this Site's Categories.");
 
-        new Setting(
-            contentEl
-        )
-            .addButton(
-                (button) => {
-                    button
-                        .setButtonText(
-                            "Cancel"
-                        )
-                        .onClick(
-                            () => {
-                                this.close();
-                            }
-                        );
-                }
-            )
-            .addButton(
-                (button) => {
-                    button
-                        .setButtonText(
-                            "Create draft"
-                        )
-                        .setCta()
-                        .onClick(
-                            async () => {
-                                await this.submit();
-                            }
-                        );
-                }
-            );
+        new Setting(contentEl)
+            .addButton((button) => button.setButtonText("Cancel")
+                .onClick(() => this.close()))
+            .addButton((button) => button.setButtonText("Create draft").setCta()
+                .onClick(() => { void this.submit(); }));
+
+        const initial = normalizeFolderPath(this.initialFolder);
+        if (initial) {
+            void this.loadFolder(initial);
+        } else {
+            this.folderSetting.setDesc("No folder selected. Use Choose folder to continue.");
+        }
     }
 
-    private async submit():
-        Promise<void> {
+    private async loadFolder(path: string): Promise<void> {
+        const seq = ++this.loadSequence;
+        const normalized = normalizeFolderPath(path);
+        this.loading = true;
+        this.destination = null;
+        this.categoryUid = "";
 
-        const title =
-            this.titleValue
-                .trim();
-
-        if (!title) {
-            new Notice(
-                "Enter a title for the new HakiSend Post."
-            );
-
-            return;
+        this.folderSetting?.setDesc(normalized || "No folder selected");
+        this.siteSetting?.setDesc("Resolving Site...");
+        if (this.categorySetting) {
+            this.categorySetting.controlEl.empty();
+            this.categorySetting.setDesc("Loading Categories for this folder...");
         }
 
-        const category =
-            this.categories
-                .find(
-                    (
-                        item
-                    ) =>
-                        item.uid
-                        === this.categoryUid
+        try {
+            const resolved = await this.resolveFolder(normalized);
+            if (seq !== this.loadSequence) return;
+            this.destination = resolved;
+            this.categoryUid = resolved.preferredCategoryUid;
+            this.siteSetting?.setDesc(resolved.siteName);
+            this.folderSetting?.setDesc(resolved.folderPath);
+            if (this.categorySetting) {
+                this.categorySetting.setDesc(
+                    this.categoryUid
+                        ? "Detected from the nearest folder mapping. You can choose a different Category."
+                        : "Choose the Category for the selected Site."
                 );
+                this.categorySetting.addDropdown((dropdown) => {
+                    dropdown.addOption("", "Choose a Category");
+                    for (const item of resolved.categories) {
+                        dropdown.addOption(item.uid, `${item.title} (${item.slug})`);
+                    }
+                    dropdown.setValue(this.categoryUid);
+                    dropdown.onChange((value) => {
+                        this.categoryUid = value;
+                    });
+                });
+            }
+        } catch (error) {
+            if (seq !== this.loadSequence) return;
+            const message = error instanceof Error ? error.message : String(error);
+            this.siteSetting?.setDesc("Cannot resolve Site: " + message);
+            this.categorySetting?.setDesc("Choose a valid folder to continue.");
+        } finally {
+            if (seq === this.loadSequence) this.loading = false;
+        }
+    }
 
-        if (!category) {
-            new Notice(
-                "Choose a HakiSend Category."
-            );
-
+    private async submit(): Promise<void> {
+        if (this.submitting) return;
+        if (this.loading) {
+            new Notice("Wait for the Site and Category to finish loading.");
+            return;
+        }
+        const title = this.titleValue.trim();
+        if (!title) {
+            new Notice("Enter a title for the new HakiSend Post.");
             return;
         }
 
-        this.close();
+        const selected = this.destination;
+        if (!selected) {
+            new Notice("Choose a valid Obsidian folder with an accessible HakiSend Site.");
+            return;
+        }
 
-        await this.onSubmit({
-            title,
-            category,
-        });
+        const category = selected.categories.find((item) => item.uid === this.categoryUid);
+        if (!category) {
+            new Notice("Choose a Category from the selected HakiSend Site.");
+            return;
+        }
+
+        this.submitting = true;
+        try {
+            await this.onSubmit({
+                title,
+                category,
+                siteUid: selected.siteUid,
+                folderPath: selected.folderPath,
+            });
+            this.close();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            new Notice("HakiSend New Post failed: " + message);
+        } finally {
+            this.submitting = false;
+        }
     }
 
     onClose(): void {
+        this.loadSequence++;
         this.contentEl.empty();
     }
 }
@@ -1591,6 +1607,12 @@ export default class HakiSendPublisherPlugin
         });
 
         this.addCommand({
+            id: "select-note-site",
+            name: "HakiSend: Choose Site for this Note",
+            callback: () => this.openSelectSiteForNote(),
+        });
+
+        this.addCommand({
             id: "edit-post-properties",
             name: "HakiSend: Edit Post Properties",
             callback: async () => {
@@ -1652,6 +1674,34 @@ export default class HakiSendPublisherPlugin
             ),
             sites: Array.isArray(stored.sites)
                 ? stored.sites
+                : [],
+            folderSiteMappings: Array.isArray(stored.folderSiteMappings)
+                ? stored.folderSiteMappings.filter((mapping: unknown): mapping is FolderSiteMapping => {
+                    if (!mapping || typeof mapping !== "object") return false;
+                    const candidate = mapping as Partial<FolderSiteMapping>;
+                    return typeof candidate.folderPath === "string"
+                        && !!normalizeFolderPath(candidate.folderPath)
+                        && typeof candidate.siteUid === "string"
+                        && !!candidate.siteUid.trim();
+                }).map((mapping: FolderSiteMapping) => ({
+                    folderPath: normalizeFolderPath(mapping.folderPath),
+                    siteUid: mapping.siteUid.trim(),
+                }))
+                : [],
+            folderCategoryMappings: Array.isArray(stored.folderCategoryMappings)
+                ? stored.folderCategoryMappings.filter((mapping: unknown): mapping is FolderCategoryMapping => {
+                    if (!mapping || typeof mapping !== "object") return false;
+                    const candidate = mapping as Partial<FolderCategoryMapping>;
+                    return typeof candidate.folderPath === "string"
+                        && !!normalizeFolderPath(candidate.folderPath)
+                        && typeof candidate.siteUid === "string" && !!candidate.siteUid.trim()
+                        && typeof candidate.categoryUid === "string" && !!candidate.categoryUid.trim();
+                }).map((mapping: FolderCategoryMapping) => ({
+                    folderPath: normalizeFolderPath(mapping.folderPath),
+                    siteUid: mapping.siteUid.trim(),
+                    categoryUid: mapping.categoryUid.trim(),
+                    categoryTitle: typeof mapping.categoryTitle === "string" ? mapping.categoryTitle : undefined,
+                }))
                 : [],
         };
     }
@@ -2193,6 +2243,222 @@ export default class HakiSendPublisherPlugin
     }
 
 
+    resolveSiteForFile(file: TFile, frontmatter: Record<string, unknown> = {}): string {
+        const explicit = [frontmatter.site_uid, frontmatter.site]
+            .find((value) => typeof value === "string" && !!value.trim());
+        if (typeof explicit === "string") {
+            const key = explicit.trim().toLowerCase();
+            const site = this.settings.sites.find((candidate) =>
+                candidate.uid.toLowerCase() === key
+                || (candidate.slug || "").toLowerCase() === key
+                || candidate.name.toLowerCase() === key
+            );
+            if (!site) throw new Error(`Site "${explicit}" in Properties is not accessible. Refresh HakiSend Sites.`);
+            return site.uid;
+        }
+        const routes = [...this.settings.folderSiteMappings]
+            .filter((route) => pathIsWithinFolder(file.path, route.folderPath))
+            .sort((a, b) => b.folderPath.length - a.folderPath.length);
+        if (routes.length) {
+            const uid = routes[0].siteUid;
+            if (!this.settings.sites.some((site) => site.uid === uid))
+                throw new Error(`Folder route "${routes[0].folderPath}" refers to an unavailable HakiSend Site.`);
+            return uid;
+        }
+        const fallback = this.settings.defaultSiteUid.trim();
+        if (!fallback) throw new Error("Choose a Default Site or configure Folder → Site routes.");
+        if (this.settings.sites.length && !this.settings.sites.some((site) => site.uid === fallback))
+            throw new Error("Default Site unavailable. Refresh HakiSend Sites.");
+        return fallback;
+    }
+
+    resolveSiteForFolder(folder: string): string {
+        return this.resolveSiteForFile({ path: normalizeFolderPath(folder) + "/_new.md" } as TFile);
+    }
+
+    private findCategoryRoute(filePath: string, siteUid: string): FolderCategoryMapping | null {
+        const routes = [...this.settings.folderCategoryMappings]
+            .filter((route) => pathIsWithinFolder(filePath, route.folderPath))
+            .sort((a, b) => b.folderPath.length - a.folderPath.length);
+        if (!routes.length) return null;
+        if (routes[0].siteUid !== siteUid) {
+            throw new Error(`Category folder "${routes[0].folderPath}" belongs to a different HakiSend Site. Review site_uid or the folder route.`);
+        }
+        return routes[0];
+    }
+
+    openAddCategoryRouteModal(): void {
+        const sites = this.settings.sites;
+        if (!sites.length) {
+            new Notice("Connect HakiSend and refresh Sites before mapping Categories.");
+            return;
+        }
+        const modal = new Modal(this.app);
+        modal.titleEl.setText("Map Obsidian folder to HakiSend Category");
+        modal.contentEl.createEl("p", {
+            text: "Each Site has its own Categories. Child folders inherit the closest Category route.",
+        });
+        let folderPath = "";
+        let siteUid = sites[0].uid;
+        let categoryUid = "";
+        let loadedCategories: HakiSendCategory[] = [];
+        let loadSequence = 0;
+        let siteDropdown: DropdownComponent | null = null;
+
+        const folderSetting = new Setting(modal.contentEl)
+            .setName("Obsidian folder")
+            .setDesc("No folder selected. Search the folders in this vault.");
+        folderSetting.addButton((button) => button
+            .setButtonText("Choose folder…")
+            .onClick(() => {
+                new HakiSendFolderPicker(this.app, (folder) => {
+                    folderPath = folder.path;
+                    folderSetting.setDesc(folderPath);
+                    try {
+                        const routedSite = this.resolveSiteForFolder(folder.path);
+                        if (routedSite !== siteUid) {
+                            siteUid = routedSite;
+                            siteDropdown?.setValue(siteUid);
+                            void reloadCategories();
+                        }
+                    } catch (error) {
+                        folderSetting.setDesc(folderPath + " · " + this.safeErrorMessage(error));
+                    }
+                }).open();
+            }));
+
+        const categorySetting = new Setting(modal.contentEl)
+            .setName("Category")
+            .setDesc("Loading Categories from selected HakiSend Site...");
+        const reloadCategories = async (): Promise<void> => {
+            const request = ++loadSequence;
+            loadedCategories = [];
+            categoryUid = "";
+            categorySetting.controlEl.empty();
+            categorySetting.setDesc("Loading authorized Categories...");
+            try {
+                const token = await this.getAccessToken();
+                if (!token) throw new Error("HakiSend is not connected.");
+                const loaded = await this.categoriesForSite(siteUid, token);
+                if (request !== loadSequence) return;
+                loadedCategories = loaded;
+                categorySetting.setDesc(loaded.length
+                    ? "Select one Category from this Site."
+                    : "No Categories exist on this Site.");
+                categorySetting.addDropdown((dropdown) => {
+                    dropdown.addOption("", "Choose a Category");
+                    for (const category of loaded) {
+                        dropdown.addOption(category.uid, category.title + " (" + category.slug + ")");
+                    }
+                    dropdown.setValue("");
+                    dropdown.onChange((value) => { categoryUid = value; });
+                });
+            } catch (error) {
+                if (request !== loadSequence) return;
+                categorySetting.setDesc("Cannot load Categories: " + this.safeErrorMessage(error));
+            }
+        };
+
+        new Setting(modal.contentEl)
+            .setName("Site")
+            .setDesc("Selected automatically from the folder's Site route.")
+            .addDropdown((dropdown) => {
+                siteDropdown = dropdown;
+                for (const site of sites) dropdown.addOption(site.uid, site.name);
+                dropdown.setValue(siteUid);
+                dropdown.onChange((value) => {
+                    siteUid = value;
+                    void reloadCategories();
+                });
+            });
+
+        // Load the selected Site's live Categories after setting up the modal.
+        void reloadCategories();
+
+        new Setting(modal.contentEl)
+            .addButton((button) => button.setButtonText("Cancel")
+                .onClick(() => modal.close()))
+            .addButton((button) => button.setButtonText("Save mapping").setCta()
+                .onClick(async () => {
+                    const folder = normalizeFolderPath(folderPath);
+                    const selected = loadedCategories.find((item) => item.uid === categoryUid);
+                    if (!folder || !selected) {
+                        new Notice("Choose an existing folder and a HakiSend Category.");
+                        return;
+                    }
+                    const target = this.app.vault.getAbstractFileByPath(folder);
+                    if (!target || !(target instanceof TFolder)) {
+                        new Notice("Create this folder in Obsidian before mapping it.");
+                        return;
+                    }
+                    try {
+                        const resolvedSite = this.resolveSiteForFolder(folder);
+                        if (resolvedSite !== siteUid) {
+                            throw new Error("This folder routes to a different Site. Set its parent Site route first.");
+                        }
+                        this.settings.folderCategoryMappings = this.settings.folderCategoryMappings
+                            .filter((item) => item.folderPath !== folder);
+                        this.settings.folderCategoryMappings.push({
+                            folderPath: folder,
+                            siteUid,
+                            categoryUid: selected.uid,
+                            categoryTitle: selected.title,
+                        });
+                        await this.saveSettings();
+                        modal.close();
+                        this.settingTab?.display();
+                        new Notice("Category folder mapping saved.");
+                    } catch (error) {
+                        new Notice("Category mapping failed: " + this.safeErrorMessage(error));
+                    }
+                }));
+        modal.open();
+    }
+
+    private openSelectSiteForNote(): void {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || file.extension.toLowerCase() !== "md") {
+            new Notice("Open a Markdown note first.");
+            return;
+        }
+        const sites = this.settings.sites;
+        if (!sites.length) {
+            new Notice("Connect HakiSend and load available Sites first.");
+            return;
+        }
+        const initial = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+        const pinned = typeof initial.site_uid === "string" ? initial.site_uid : "";
+        const modal = new Modal(this.app);
+        modal.titleEl.setText("Choose HakiSend Site");
+        modal.contentEl.createEl("p", {
+            text: "Pin this note to one Site, or use its folder route. Changing Site after publishing may create a Post on the new Site.",
+        });
+        let chosen = pinned;
+        new Setting(modal.contentEl)
+            .setName("Publishing Site")
+            .addDropdown((dropdown) => {
+                dropdown.addOption("", "Use folder mapping / Default Site");
+                for (const site of sites) dropdown.addOption(site.uid, site.name);
+                dropdown.setValue(chosen);
+                dropdown.onChange((value) => { chosen = value; });
+            });
+        new Setting(modal.contentEl).addButton((button) => button
+            .setButtonText("Apply to Properties").setCta().onClick(async () => {
+                try {
+                    await this.app.fileManager.processFrontMatter(file, (data) => {
+                        delete data.site;
+                        if (chosen) data.site_uid = chosen;
+                        else delete data.site_uid;
+                    });
+                    modal.close();
+                    new Notice("Site saved locally. Review Category before publishing.");
+                } catch (error) {
+                    new Notice("Cannot set Site: " + this.safeErrorMessage(error));
+                }
+            }));
+        modal.open();
+    }
+
     private async openPostProperties():
         Promise<void> {
 
@@ -2222,16 +2488,8 @@ export default class HakiSendPublisherPlugin
                 );
             }
 
-            const siteUid =
-                this.settings
-                    .defaultSiteUid
-                    .trim();
-
-            if (!siteUid) {
-                throw new Error(
-                    "Choose a Default Site in HakiSend Publisher settings."
-                );
-            }
+            const siteUid = this.resolveSiteForFile(file,
+                this.app.metadataCache.getFileCache(file)?.frontmatter ?? {});
 
             const categories =
                 await this
@@ -2337,24 +2595,31 @@ export default class HakiSendPublisherPlugin
                     requestedCategory
                 );
 
-            const selectedCategory =
-                categories.find(
-                    (
-                        category
-                    ) =>
-                        category.uid
-                            === requestedCategory
-                        || category.slug
-                            .toLowerCase()
-                            === lowered
-                        || category.title
-                            .toLowerCase()
-                            === lowered
-                        || category.slug
-                            .toLowerCase()
-                            === slugged
-                )
-                ?? categories[0];
+            const categoryRoute = this.findCategoryRoute(file.path, siteUid);
+            const pinnedCategoryUid = typeof frontmatter.category_uid === "string"
+                ? frontmatter.category_uid.trim() : "";
+            const pinnedCategory = pinnedCategoryUid
+                ? categories.find((item) => item.uid === pinnedCategoryUid)
+                : null;
+            if (pinnedCategoryUid && !pinnedCategory)
+                throw new Error("This note's category_uid does not belong to its current Site. Choose a new Category for the Site.");
+
+            const manualCategory = categories.find((category) =>
+                category.uid === requestedCategory
+                || category.slug.toLowerCase() === lowered
+                || category.title.toLowerCase() === lowered
+                || category.slug.toLowerCase() === slugged
+            );
+            if (configuredCategory && !manualCategory && !pinnedCategory)
+                throw new Error("This note's Category does not belong to its current Site. Update its category in Properties.");
+            const mappedCategory = categoryRoute
+                ? categories.find((item) => item.uid === categoryRoute.categoryUid)
+                : null;
+            if (categoryRoute && !mappedCategory)
+                throw new Error("Mapped Category no longer exists on this Site. Update the Category folder mapping.");
+
+            const selectedCategory = pinnedCategory ?? manualCategory
+                ?? mappedCategory ?? categories[0];
 
             new HakiSendPostPropertiesModal(
                 this.app,
@@ -2408,6 +2673,7 @@ export default class HakiSendPublisherPlugin
                         values
                             .category
                             .slug;
+                    data.category_uid = values.category.uid;
 
                     if (
                         values.slug
@@ -2458,115 +2724,81 @@ export default class HakiSendPublisherPlugin
     }
 
 
-    private async openNewPost():
-        Promise<void> {
+    /**
+     * This folder's resolved Site and mapped Category control all default
+     * values. A nested folder inherits the closest Category route; a folder
+     * with no matching mapping requires an explicit Category selection.
+     */
+    private async resolveNewPostDestination(
+        folderPath: string
+    ): Promise<HakiSendNewPostDestination> {
+        const folder = normalizeFolderPath(folderPath);
+        const target = this.app.vault.getAbstractFileByPath(folder);
+        if (!folder || !(target instanceof TFolder)) {
+            throw new Error("Choose an existing Obsidian folder.");
+        }
 
+        const token = await this.getAccessToken();
+        if (!token) {
+            throw new Error("HakiSend is not connected.");
+        }
+
+        const siteUid = this.resolveSiteForFolder(folder);
+        const site = this.settings.sites.find((item) => item.uid === siteUid);
+        if (!site) {
+            throw new Error("The folder is not linked to an accessible HakiSend Site.");
+        }
+        const categories = await this.categoriesForSite(siteUid, token);
+        if (!categories.length) {
+            throw new Error("This Site has no Categories. Create a Category in HakiSend first.");
+        }
+
+        const route = this.findCategoryRoute(folder + "/_new.md", siteUid);
+        const mapped = route
+            ? categories.find((item) => item.uid === route.categoryUid)
+            : undefined;
+        if (route && !mapped) {
+            throw new Error(
+                "The mapped Category no longer exists on this Site. Update its Category folder mapping."
+            );
+        }
+
+        const folderName = target.name.trim();
+        const normalizedName = folderName.toLowerCase();
+        const folderSlug = simpleSlug(folderName);
+        const matchedByName = categories.find((item) =>
+            item.title.toLowerCase() === normalizedName
+            || item.slug.toLowerCase() === normalizedName
+            || item.slug.toLowerCase() === folderSlug
+        );
+
+        return {
+            folderPath: folder,
+            siteUid,
+            siteName: site.name,
+            categories,
+            preferredCategoryUid: (mapped ?? matchedByName)?.uid ?? "",
+        };
+    }
+
+    private async openNewPost(): Promise<void> {
         try {
-            const token =
-                await this
-                    .getAccessToken();
-
+            const token = await this.getAccessToken();
             if (!token) {
-                throw new Error(
-                    "HakiSend is not connected."
-                );
+                throw new Error("HakiSend is not connected.");
             }
 
-            const siteUid =
-                this.settings
-                    .defaultSiteUid
-                    .trim();
-
-            if (!siteUid) {
-                throw new Error(
-                    "Choose a Default Site in HakiSend Publisher settings."
-                );
-            }
-
-            const categories =
-                await this
-                    .categoriesForSite(
-                        siteUid,
-                        token
-                    );
-
-            if (!categories.length) {
-                throw new Error(
-                    "This Site has no Categories. Create a Category in HakiSend first."
-                );
-            }
-
-            const active =
-                this.app.workspace
-                    .getActiveFile();
-
-            const destinationFolder =
-                (
-                    active
-                        ?.parent
-                        ?.path
-                    ?? ""
-                )
-                    .replace(
-                        /^\/+|\/+$/g,
-                        ""
-                    );
-
-            const folderName =
-                active
-                    ?.parent
-                    ?.name
-                    ?.trim()
-                ?? "";
-
-            const lowered =
-                folderName
-                    .toLowerCase();
-
-            const folderSlug =
-                simpleSlug(
-                    folderName
-                );
-
-            const preferred =
-                categories.find(
-                    (
-                        category
-                    ) =>
-                        category.title
-                            .toLowerCase()
-                            === lowered
-                        || category.slug
-                            .toLowerCase()
-                            === lowered
-                        || category.slug
-                            .toLowerCase()
-                            === folderSlug
-                )
-                ?? categories[0];
+            const active = this.app.workspace.getActiveFile();
+            const initialFolder = active?.parent?.path ?? "";
 
             new HakiSendNewPostModal(
                 this.app,
-                categories,
-                preferred.uid,
-                destinationFolder,
-                async (
-                    values
-                ) => {
-                    await this
-                        .createNewPost(
-                            destinationFolder,
-                            values
-                        );
-                }
+                initialFolder,
+                async (folder) => this.resolveNewPostDestination(folder),
+                async (values) => this.createNewPost(values)
             ).open();
         } catch (error) {
-            new Notice(
-                "HakiSend New Post failed: "
-                + this.safeErrorMessage(
-                    error
-                )
-            );
+            new Notice("HakiSend New Post failed: " + this.safeErrorMessage(error));
         }
     }
 
@@ -2617,59 +2849,35 @@ export default class HakiSendPublisherPlugin
         return candidate;
     }
 
-    private async createNewPost(
-        folderPath: string,
-        values:
-            HakiSendNewPostValues
-    ): Promise<void> {
+    private async createNewPost(values: HakiSendNewPostValues): Promise<void> {
+        // Recheck on submit: folder routing may have changed while modal was open.
+        const resolved = await this.resolveNewPostDestination(values.folderPath);
+        if (resolved.siteUid !== values.siteUid) {
+            throw new Error("Folder Site mapping changed. Reopen New Post and choose the destination again.");
+        }
+        const category = resolved.categories.find((item) => item.uid === values.category.uid);
+        if (!category) {
+            throw new Error("The selected Category is no longer available on this Site. Choose it again.");
+        }
 
-        const externalId =
-            uuidV4();
+        const path = this.uniqueNewPostPath(resolved.folderPath, values.title);
+        const externalId = uuidV4();
+        const content = [
+            "---",
+            "site_uid: " + yamlQuotedScalar(resolved.siteUid),
+            "title: " + yamlQuotedScalar(values.title),
+            "status: draft",
+            "category: " + yamlQuotedScalar(category.slug),
+            "category_uid: " + yamlQuotedScalar(category.uid),
+            "external_id: " + externalId,
+            "---",
+            "",
+            "",
+        ].join("\n");
 
-        const path =
-            this.uniqueNewPostPath(
-                folderPath,
-                values.title
-            );
-
-        const content =
-            [
-                "---",
-                "title: "
-                    + yamlQuotedScalar(
-                        values.title
-                    ),
-                "status: draft",
-                "category: "
-                    + yamlQuotedScalar(
-                        values
-                            .category
-                            .slug
-                    ),
-                "external_id: "
-                    + externalId,
-                "---",
-                "",
-                "",
-            ].join("\n");
-
-        const file =
-            await this.app.vault
-                .create(
-                    path,
-                    content
-                );
-
-        await this.app.workspace
-            .getLeaf(false)
-            .openFile(
-                file
-            );
-
-        new Notice(
-            "HakiSend draft created: "
-            + file.path
-        );
+        const file = await this.app.vault.create(path, content);
+        await this.app.workspace.getLeaf(false).openFile(file);
+        new Notice("HakiSend draft created: " + file.path);
     }
 
 
@@ -3551,61 +3759,41 @@ export default class HakiSendPublisherPlugin
                 token
             );
 
-        const configured =
-            typeof frontmatter.category
-                === "string"
-                ? frontmatter
-                    .category
-                    .trim()
-                : "";
+        const categoryRoute = this.findCategoryRoute(file.path, siteUid);
+        const pinnedUid = typeof frontmatter.category_uid === "string"
+            ? frontmatter.category_uid.trim() : "";
+        const explicitCategory = typeof frontmatter.category === "string"
+            ? frontmatter.category.trim() : "";
 
-        const folderFallback =
-            file.parent?.name?.trim()
-            ?? "";
-
-        const requested =
-            configured
-            || folderFallback;
-
-        if (!requested) {
-            throw new Error(
-                "A Category is required. Add category: <slug> to frontmatter."
+        let category: HakiSendCategory | undefined;
+        if (pinnedUid) {
+            category = categories.find((item) => item.uid === pinnedUid);
+            if (!category) throw new Error("category_uid does not belong to the selected Site. Choose a Category for this Site.");
+        } else if (explicitCategory) {
+            const key = explicitCategory.toLowerCase();
+            const slugged = simpleSlug(explicitCategory);
+            category = categories.find((item) =>
+                item.uid === explicitCategory
+                || item.slug.toLowerCase() === key
+                || item.title.toLowerCase() === key
+                || item.slug.toLowerCase() === slugged
             );
-        }
-
-        const lowered =
-            requested.toLowerCase();
-
-        const slugged =
-            simpleSlug(requested);
-
-        const category =
-            categories.find(
-                (item) =>
-                    item.uid
-                        === requested
-                    || item.slug
-                        .toLowerCase()
-                        === lowered
-                    || item.title
-                        .toLowerCase()
-                        === lowered
-                    || item.slug
-                        .toLowerCase()
-                        === slugged
+            if (!category) throw new Error(`Category "${explicitCategory}" does not exist on this Site.`);
+        } else if (categoryRoute) {
+            category = categories.find((item) => item.uid === categoryRoute.categoryUid);
+            if (!category) throw new Error("The mapped Category is no longer available on the selected Site.");
+        } else {
+            const folderName = file.parent?.name?.trim() ?? "";
+            const key = folderName.toLowerCase();
+            const slugged = simpleSlug(folderName);
+            category = categories.find((item) =>
+                item.uid === folderName
+                || item.slug.toLowerCase() === key
+                || item.title.toLowerCase() === key
+                || item.slug.toLowerCase() === slugged
             );
-
-        if (!category) {
-            const available =
-                categories
-                    .map(
-                        (item) =>
-                            `${item.title} (${item.slug})`
-                    )
-                    .join(", ");
-
-            throw new Error(
-                `Category "${requested}" does not exist in this Site. Available: ${available}`
+            if (!category) throw new Error(
+                `No Category assigned for folder "${file.parent?.path ?? ""}". Set category_uid, choose a Category in Properties or configure a Category folder mapping.`
             );
         }
 
@@ -3634,16 +3822,7 @@ export default class HakiSendPublisherPlugin
                             .trim()
                         : file.basename,
 
-                site:
-                    typeof frontmatter.site
-                        === "string"
-                        && frontmatter
-                            .site
-                            .trim()
-                        ? frontmatter
-                            .site
-                            .trim()
-                        : siteUid,
+                site: siteUid,
 
                 type: "post",
 
@@ -3841,17 +4020,6 @@ export default class HakiSendPublisherPlugin
             );
         }
 
-        const siteUid =
-            this.settings
-                .defaultSiteUid
-                .trim();
-
-        if (!siteUid) {
-            throw new Error(
-                "Choose a Default Site in HakiSend Publisher settings."
-            );
-        }
-
         const cached =
             this.app.metadataCache
                 .getFileCache(file);
@@ -3864,6 +4032,8 @@ export default class HakiSendPublisherPlugin
                         .frontmatter,
                 }
                 : {};
+
+        const siteUid = this.resolveSiteForFile(file, frontmatter);
 
         if (
             metadataOverrides
@@ -4544,7 +4714,15 @@ export default class HakiSendPublisherPlugin
             );
         }
 
+        let destination = "unresolved";
+        try {
+            const uid = this.resolveSiteForFile(file, frontmatter);
+            destination = this.settings.sites.find((site) => site.uid === uid)?.name ?? uid;
+        } catch (error) {
+            destination = this.safeErrorMessage(error);
+        }
         const lines = [
+            "Site: " + destination,
             "HakiSend local state: "
                 + state,
             "Category: "
@@ -4769,6 +4947,85 @@ class HakiSendPublisherSettingTab
 
         const sites =
             this.plugin.settings.sites;
+
+        containerEl.createEl("h3", { text: "Folder → Site publishing routes" });
+        containerEl.createEl("p", {
+            text: "Subfolders inherit the closest parent route. site_uid in note Properties overrides routes.",
+            cls: "setting-item-description",
+        });
+        for (const route of this.plugin.settings.folderSiteMappings) {
+            new Setting(containerEl)
+                .setName(route.folderPath)
+                .addDropdown((dropdown) => {
+                    for (const site of sites) dropdown.addOption(site.uid, site.name);
+                    dropdown.setValue(route.siteUid);
+                    dropdown.onChange(async (value) => {
+                        route.siteUid = value;
+                        await this.plugin.saveSettings();
+                    });
+                })
+                .addButton((button) => button.setButtonText("Remove").onClick(async () => {
+                    this.plugin.settings.folderSiteMappings = this.plugin.settings.folderSiteMappings.filter((item) => item !== route);
+                    await this.plugin.saveSettings();
+                    this.display();
+                }));
+        }
+        let newFolder = "";
+        let newSite = sites[0]?.uid ?? "";
+        const newRouteSetting = new Setting(containerEl)
+            .setName("Add folder route")
+            .setDesc("Choose an existing Obsidian folder.");
+        newRouteSetting
+            .addButton((button) => button.setButtonText("Choose folder…")
+                .onClick(() => new HakiSendFolderPicker(this.app, (folder) => {
+                    newFolder = folder.path;
+                    newRouteSetting.setDesc(folder.path);
+                }).open()))
+            .addDropdown((dropdown) => {
+                for (const site of sites) dropdown.addOption(site.uid, site.name);
+                if (newSite) dropdown.setValue(newSite);
+                dropdown.onChange((value) => { newSite = value; });
+            })
+            .addButton((button) => button.setButtonText("Add route").onClick(async () => {
+                const folder = normalizeFolderPath(newFolder);
+                if (!folder || !newSite) {
+                    new Notice("Select a folder and a Site.");
+                    return;
+                }
+                const target = this.app.vault.getAbstractFileByPath(folder);
+                if (!target || !(target instanceof TFolder)) {
+                    new Notice("Choose a valid folder from this Obsidian vault.");
+                    return;
+                }
+                this.plugin.settings.folderSiteMappings = this.plugin.settings.folderSiteMappings.filter((item) => item.folderPath !== folder);
+                this.plugin.settings.folderSiteMappings.push({ folderPath: folder, siteUid: newSite });
+                await this.plugin.saveSettings();
+                this.display();
+            }));
+
+        containerEl.createEl("h3", { text: "Category folder mappings" });
+        containerEl.createEl("p", {
+            text: "A Category is specific to one HakiSend Site. Map each Category folder to its actual server Category UID. Child folders inherit the mapping.",
+            cls: "setting-item-description",
+        });
+        for (const route of this.plugin.settings.folderCategoryMappings) {
+            const site = sites.find((candidate) => candidate.uid === route.siteUid);
+            new Setting(containerEl)
+                .setName(route.folderPath)
+                .setDesc((site?.name ?? "Unavailable Site")
+                    + " → " + (route.categoryTitle ?? route.categoryUid))
+                .addButton((button) => button.setButtonText("Remove").onClick(async () => {
+                    this.plugin.settings.folderCategoryMappings = this.plugin.settings.folderCategoryMappings
+                        .filter((item) => item !== route);
+                    await this.plugin.saveSettings();
+                    this.display();
+                }));
+        }
+        new Setting(containerEl)
+            .setName("Map a Category folder")
+            .setDesc("Select the folder, parent Site, and a real Category from HakiSend.")
+            .addButton((button) => button.setButtonText("Add Category mapping")
+                .onClick(() => this.plugin.openAddCategoryRouteModal()));
 
         new Setting(containerEl)
             .setName("Default Site")

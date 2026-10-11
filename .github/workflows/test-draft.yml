@@ -1,0 +1,48 @@
+name: Test HakiSend Publisher draft
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches:
+      - feature/multisite-calendar-sync-design-20261010
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Compile Obsidian plugin
+        run: npm run build
+      - name: Verify runtime artifacts
+        run: |
+          test -s main.js
+          test -s manifest.json
+          test -s styles.css
+          node -e "const m=require('./manifest.json'); if(m.id!=='hakisend-publisher'||m.isDesktopOnly!==false)process.exit(1)"
+      - name: Package installable plugin
+        run: |
+          mkdir -p dist/hakisend-publisher
+          cp main.js manifest.json styles.css dist/hakisend-publisher/
+          cd dist
+          zip -r hakisend-publisher-draft-test.zip hakisend-publisher
+      - name: Upload draft plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hakisend-publisher-draft-test
+          path: dist/hakisend-publisher-draft-test.zip
+          if-no-files-found: error
