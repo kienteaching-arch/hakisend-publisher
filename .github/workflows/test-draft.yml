@@ -1,4 +1,4 @@
-name: Test HakiSend Publisher draft
+name: Build and test HakiSend Publisher (non-production)
 
 on:
   pull_request:
@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - feature/multisite-calendar-sync-design-20261010
+      - work/publisher-delivery-20261013
   workflow_dispatch:
 
 permissions:
@@ -24,6 +25,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Test source-release provenance contract
+        run: node --test tests/*.test.mjs
       - name: Type-check
         run: npx tsc --noEmit
       - name: Compile Obsidian plugin
@@ -34,15 +37,30 @@ jobs:
           test -s manifest.json
           test -s styles.css
           node -e "const m=require('./manifest.json'); if(m.id!=='hakisend-publisher'||m.isDesktopOnly!==false)process.exit(1)"
-      - name: Package installable plugin
+      - name: Inspect source provenance (informational)
+        run: node scripts/release-provenance.mjs --status
+      - name: Gate installable package on reconciled, owner-authorized source
+        id: gate
+        shell: bash
+        run: |
+          if node scripts/release-provenance.mjs --release > /dev/null; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Owner-approved version and source checksums matched."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Packaging withheld: tested v0.1.9 source has not been reconciled and/or release was not authorized."
+          fi
+      - name: Package installable plugin (only if approved)
+        if: steps.gate.outputs.ready == 'true'
         run: |
           mkdir -p dist/hakisend-publisher
           cp main.js manifest.json styles.css dist/hakisend-publisher/
           cd dist
-          zip -r hakisend-publisher-draft-test.zip hakisend-publisher
-      - name: Upload draft plugin artifact
+          zip -r hakisend-publisher-approved-test.zip hakisend-publisher
+      - name: Upload owner-approved plugin artifact (not deployed)
+        if: steps.gate.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: hakisend-publisher-draft-test
-          path: dist/hakisend-publisher-draft-test.zip
+          name: hakisend-publisher-approved-test
+          path: dist/hakisend-publisher-approved-test.zip
           if-no-files-found: error
