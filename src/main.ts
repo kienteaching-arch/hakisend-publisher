@@ -12,7 +12,7 @@ import { Modal,
 } from "obsidian";
 
 import {requestPrivateDraft} from "./email/hakisend-draft-api";
-import {parsePrivateDraftList, type PrivateDraftListRow} from "./email/private-draft-list";
+import {parsePrivateDraftList, parsePrivateDraftDetail, type PrivateDraftListRow, type PrivateDraftReadOnlyDetail} from "./email/private-draft-list";
 
 /**
  * Fuzzy search across existing folders. Searching by path is more reliable
@@ -1583,7 +1583,8 @@ class HakiSendPrivateEmailBrowserModal extends Modal {
     constructor(
         app: App,
         private readonly sites: readonly HakiSendSite[],
-        private readonly loadRows: (siteUid: string) => Promise<PrivateDraftListRow[]>
+        private readonly loadRows: (siteUid: string) => Promise<PrivateDraftListRow[]>,
+        private readonly loadDetail: (siteUid: string, draftUid: string) => Promise<PrivateDraftReadOnlyDetail>
     ) {
         super(app);
     }
@@ -1636,6 +1637,28 @@ class HakiSendPrivateEmailBrowserModal extends Modal {
                             const item = list.createEl("li");
                             item.createEl("strong", {text:row.subject});
                             item.createSpan({text:" · Revision "+row.revision+" · Private Draft — NOT sent"});
+                            const detailBox = item.createDiv();
+                            new Setting(item).addButton(button => button
+                                .setButtonText("Read-only preview")
+                                .onClick(async () => {
+                                    if (chosen !== this.siteUid || current !== this.sequence) return;
+                                    const reqSeq = this.sequence;
+                                    detailBox.empty();
+                                    detailBox.createEl("p", {text:"Reading the private Draft..."});
+                                    try {
+                                        const detail = await this.loadDetail(chosen, row.uid);
+                                        if (reqSeq !== this.sequence || chosen !== this.siteUid) return;
+                                        detailBox.empty();
+                                        detailBox.createEl("p", {text:"Server Draft · Revision "+detail.revision+" · NOT sent"});
+                                        // Render as plain text only: Markdown can contain
+                                        // untrusted HTML and private message content.
+                                        detailBox.createEl("pre", {text:detail.body});
+                                    } catch {
+                                        if (reqSeq !== this.sequence) return;
+                                        detailBox.empty();
+                                        detailBox.createEl("p", {text:"Private Draft preview unavailable."});
+                                    }
+                                }));
                         }
                         results.createEl("p", {
                             text:"HakiSend returns at most 50 records and does not provide a cursor. This view may be incomplete."
@@ -1751,6 +1774,19 @@ export default class HakiSendPublisherPlugin
                             "GET"
                         );
                         return parsePrivateDraftList(data);
+                    },
+                    async (siteUid, draftUid) => {
+                        const token = await this.getAccessToken();
+                        if (!token) throw Error("Connection required.");
+                        const data = await requestPrivateDraft<unknown>(
+                            request => requestUrl(request),
+                            normalizeBaseUrl(this.settings.apiBaseUrl),
+                            siteUid,
+                            token,
+                            "drafts/" + draftUid,
+                            "GET"
+                        );
+                        return parsePrivateDraftDetail(data, draftUid);
                     }
                 ).open();
             },
