@@ -102,3 +102,13 @@ It is NOT an installed two-way write API.
 No workflow shall publish a downloadable installer or label the build
 final until all eight gates are demonstrated on matching source and
 explicitly approved by the owner.
+
+
+## New candidate (14 Oct 2026) — user-initiated Acelle Draft promotion
+
+- Editable TS now has a separate, restrictive no-send promotion transport and two explicit Obsidian commands: **Create Acelle Campaign from Private Draft (NOT sent)** and **Recover Campaign Draft Receipt (read-only lookup)**.
+- The Create modal shows source/revision and cannot submit without the user's checkbox confirmation, verified sender fields, OAuth, and an already saved Site Private Draft. Site-owned list is never overridable from the promotion payload.
+- On confirmation, re-read remote source; compare exact draft UID/revision/subject/Markdown; durably persist a cryptographic request UID to frontmatter **before POST**. A second attempt with existing UID cannot create another Campaign; user must instead call manual GET receipt recovery. The original Markdown body is not overwritten.
+- After POST, user gets a fresh server GET receipt. Only a matching, native NEW unscheduled Acelle Campaign UID is written into local frontmatter. Ambiguous/unauthorized/changed states are never marked delivered or scheduled; there are no automatic retries.
+- The server route and both candidates still remain unmounted and feature-OFF in the installed Sites plugin. This is **development source only**. Actual delivery/schedule commands, consent/unsubscribe, template parity and final owner-tested Obsidian v0.1.9 equivalence are all **blocked** pending complete UAT.
+- Pure TypeScript CI and Obsidian TypeScript compile/build must pass. Candidate backend isolated Laravel/MySQL8 route GET/POST CI must pass before claiming interoperable readback.
