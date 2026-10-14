@@ -2299,6 +2299,11 @@ export default class HakiSendPublisherPlugin
                         "drafts/"+draftUid,"GET"
                     ),
                     persistRequestUid:async requestUid=>{
+                        // The server-source GET may have taken time. A local edit
+                        // during that read must abort before any remote POST.
+                        if(await this.app.vault.read(file)!==raw){
+                            throw Error("Local note changed during remote Draft verification.");
+                        }
                         await this.app.fileManager.processFrontMatter(file,fm=>{
                             if(fm.site_uid!==plan.siteUid ||
                                fm.hakisend_remote_email_draft_uid!==plan.draftUid ||
