@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parsePrivateDraftList} from '../src/email/private-draft-list.ts';
+import {parsePrivateDraftList,parsePrivateDraftDetail} from '../src/email/private-draft-list.ts';
 const ID='11111111-1111-4111-8111-111111111111';
 const valid={
   uid:ID,subject:'A private Email',revision:2,status:'private_draft',
@@ -31,4 +31,16 @@ test('reject unbounded/malformed server list',()=>{
   assert.throws(()=>parsePrivateDraftList({drafts:[valid]}),/Unexpected/);
   assert.throws(()=>parsePrivateDraftList(Array.from({length:51},()=>valid)),/Unexpected/);
   assert.throws(()=>parsePrivateDraftList([null]),/Unverified/);
+});
+
+test('read-only detail requires exactly selected private Draft identity',()=>{
+  const detail={...valid,body_markdown:'# Private content\nSecond line'};
+  assert.deepEqual(parsePrivateDraftDetail(detail,ID),{
+    uid:ID,subject:valid.subject,revision:2,body:'# Private content\nSecond line'
+  });
+  assert.throws(()=>parsePrivateDraftDetail(detail,'22222222-2222-4222-8222-222222222222'),/mismatched/);
+  assert.throws(()=>parsePrivateDraftDetail({...detail,status:'sent'},ID),/Unverified/);
+  assert.throws(()=>parsePrivateDraftDetail({...detail,scheduled:true},ID),/Unverified/);
+  assert.throws(()=>parsePrivateDraftDetail({...detail,body_markdown:null},ID),/Unverified/);
+  assert.throws(()=>parsePrivateDraftDetail({...detail,body_markdown:'x'.repeat(200001)},ID),/Unverified/);
 });
