@@ -10,6 +10,12 @@ test('unconfirmed local changes are not server accepted',()=>assert.equal(projec
 test('unconfirmed email is blocked',()=>assert.equal(projectCalendar([post,{...linked,serverConfirmed:false}])[1].blockedReason,'UNCONFIRMED_LOCAL_STATE'));
 test('cross-site post cannot satisfy linked email',()=>assert.equal(projectCalendar([{...post,siteUid:'s2'},linked])[1].blockedReason,'LINKED_POST_NOT_CONFIRMED'));
 test('standalone email retains independent schedule',()=>assert.equal(projectCalendar([{...linked,kind:'standalone_email',linkedPostUid:undefined}])[0].effectiveAtUtcMs,9999));
+test('Post-linked draft is not falsely scheduled merely because Post has a confirmed date',()=>{
+ const email={...linked,status:'draft',scheduledAtUtcMs:null};
+ const result=projectCalendar([post,email])[1];
+ assert.equal(result.effectiveAtUtcMs,null);
+ assert.equal(result.blockedReason,'LINKED_EMAIL_NOT_ENROLLED');
+});
 test('missing linked post is blocked',()=>assert.equal(projectCalendar([linked])[0].blockedReason,'LINKED_POST_NOT_CONFIRMED'));
 test('invalid timestamp is rejected',()=>assert.equal(projectCalendar([{...post,scheduledAtUtcMs:NaN}])[0].blockedReason,'INVALID_TIME'));
 test('draft without schedule remains unscheduled',()=>assert.equal(projectCalendar([{...post,status:'draft',scheduledAtUtcMs:null}])[0].effectiveAtUtcMs,null));
