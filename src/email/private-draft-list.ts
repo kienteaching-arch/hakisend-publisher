@@ -36,3 +36,28 @@ export function parsePrivateDraftList(data: unknown): PrivateDraftListRow[] {
   }
   return result;
 }
+
+/** Verified on-demand GET detail. NEVER interpret body as HTML or a send payload. */
+export interface PrivateDraftReadOnlyDetail extends PrivateDraftListRow {
+  body: string;
+}
+export function parsePrivateDraftDetail(data: unknown, expectedUid: string): PrivateDraftReadOnlyDetail {
+  if (!UUID.test(expectedUid) || !object(data)
+      || data.uid !== expectedUid
+      || data.status !== 'private_draft'
+      || data.send_enabled !== false || data.scheduled !== false
+      || data.acelle_campaign_uid !== null
+      || typeof data.subject !== 'string' || !data.subject.trim()
+      || data.subject.length > 255 || /[\0\r\n]/.test(data.subject)
+      || !Number.isSafeInteger(data.revision) || (data.revision as number) < 1
+      || typeof data.body_markdown !== 'string'
+      || data.body_markdown.length > 200_000 || data.body_markdown.includes('\0')) {
+    throw Error('Unverified or mismatched private Email detail.');
+  }
+  return {
+    uid:expectedUid,
+    subject:data.subject,
+    revision:data.revision as number,
+    body:data.body_markdown,
+  };
+}
