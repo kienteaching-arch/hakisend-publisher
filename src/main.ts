@@ -18,6 +18,7 @@ import {
     decorateLocalPlan, type StandalonePlan, type Audience,
 } from "./email/private-draft-contract";
 import {explicitlySavePrivateDraft} from "./email/explicit-private-draft-save";
+import {explicitlyPromotePrivateDraft, explicitlyRecoverPrivatePromotion, requestPromotion, type PromotionSender, type PromotionReceipt} from "./email/private-draft-promotion";
 import {buildCalendarReadRequest, validateHakiSendCalendar, type ValidatedCalendarSnapshot} from "./calendar/server-calendar-contract";
 
 /**
@@ -1752,6 +1753,67 @@ class HakiSendManualDraftSaveModal extends Modal {
     onClose():void {this.contentEl.empty();}
 }
 
+
+/**
+ * Explicit review-only transition to native Acelle Campaign Draft.
+ * A deliberate confirmation is always required before the one POST.
+ * No delivery, schedule, subscribers, list mutations or auto-retry.
+ */
+class HakiSendManualPromotionModal extends Modal {
+    private fromEmail="";
+    private fromName="";
+    private replyTo="";
+    private acknowledged=false;
+    private busy=false;
+
+    constructor(
+        app:App,
+        private readonly plan:StandalonePlan,
+        private readonly onPromote:(sender:PromotionSender)=>Promise<void>
+    ){super(app);}
+
+    onOpen():void {
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"Create Acelle Campaign Draft · NOT sent"});
+        c.createEl("p",{text:"This copies the current saved Private Draft to one native Acelle Campaign in NEW status. It will NOT send, schedule, or replace the original Markdown."});
+        c.createEl("p",{text:"Subject: "+this.plan.subject});
+        c.createEl("p",{text:"Source: "+this.plan.draftUid+" · Revision "+this.plan.revision});
+        c.createEl("p",{text:"The recipient audience is the Site-authorized list already stored on HakiSend. You cannot change it here."});
+        new Setting(c).setName("Verified From email")
+            .setDesc("This address must already be verified in HakiSend's sending identities.")
+            .addText(input=>input.setPlaceholder("sender@example.com")
+                .onChange(value=>{this.fromEmail=value.trim();}));
+        new Setting(c).setName("From name")
+            .addText(input=>input.setPlaceholder("Sender name")
+                .onChange(value=>{this.fromName=value.trim();}));
+        new Setting(c).setName("Reply-to email")
+            .addText(input=>input.setPlaceholder("reply@example.com")
+                .onChange(value=>{this.replyTo=value.trim();}));
+        new Setting(c).setName("I understand this creates one Campaign Draft, NOT an email send")
+            .addToggle(toggle=>toggle.setValue(false).onChange(value=>{
+                this.acknowledged=value;
+            }));
+        new Setting(c)
+            .addButton(button=>button.setButtonText("Cancel").onClick(()=>this.close()))
+            .addButton(button=>button.setButtonText("Create Campaign Draft — NOT sent")
+                .setCta().onClick(async()=>{
+                    if(this.busy)return;
+                    if(!this.acknowledged){new Notice("Confirm that this creates a Draft, not a send.");return;}
+                    this.busy=true;button.setDisabled(true);
+                    try{
+                        await this.onPromote({
+                            fromEmail:this.fromEmail,fromName:this.fromName,replyTo:this.replyTo
+                        });
+                        this.close();
+                        new Notice("Native Acelle Campaign Draft verified. NOT sent or scheduled.");
+                    }catch{
+                        new Notice("Campaign Draft promotion not verified. Use 'Recover Campaign Draft Receipt' to inspect the server. Do not create another request.");
+                    }finally{this.busy=false;button.setDisabled(false);}
+                }));
+    }
+    onClose():void{this.contentEl.empty();}
+}
+
 class HakiSendManualDraftConflictModal extends Modal {
     private acknowledged=false;
     private busy=false;
@@ -1952,6 +2014,17 @@ export default class HakiSendPublisherPlugin
             callback: async () => {
                 await this.openManualPrivateDraftSave();
             },
+        });
+
+        this.addCommand({
+            id: "promote-private-email-to-acelle-draft",
+            name: "HakiSend: Create Acelle Campaign from Private Draft (NOT sent)",
+            callback:async()=>{await this.openManualPrivateDraftPromotion();},
+        });
+        this.addCommand({
+            id: "recover-acelle-campaign-draft-receipt",
+            name: "HakiSend: Recover Campaign Draft Receipt (read-only lookup)",
+            callback:async()=>{await this.recoverManualPrivatePromotion();},
         });
 
         this.addCommand({
@@ -2157,6 +2230,127 @@ export default class HakiSendPublisherPlugin
             }).open();
         }catch{
             new Notice("Standalone Private Draft unavailable. Open a valid Email Plan and verify your secure connection and Site permissions.");
+        }
+    }
+
+    private async promotionContext():Promise<{
+        file:TFile;raw:string;plan:StandalonePlan;fields:Record<string,unknown>;
+        token:string;origin:string;
+    }> {
+        const file=this.app.workspace.getActiveFile();
+        if(!file||file.extension!=="md")throw Error("Open a saved Standalone Email Plan.");
+        const raw=await this.app.vault.read(file);
+        const fields={...(this.app.metadataCache.getFileCache(file)?.frontmatter??{})}
+            as Record<string,unknown>;
+        const plan=parseStandalonePlan(file,fields,raw);
+        if(!plan.draftUid||!plan.revision||
+           fields.hakisend_remote_email_status!=="private_draft") {
+            throw Error("Save and verify your remote Private Draft first.");
+        }
+        if(!this.settings.sites.some(site=>site.uid===plan.siteUid)){
+            throw Error("The selected Site is not connected to this account.");
+        }
+        const token=await this.getAccessToken();
+        if(!token||!this.hasSecureConnection())throw Error("Secure OAuth required.");
+        return {file,raw,plan,fields,token,
+            origin:normalizeBaseUrl(this.settings.apiBaseUrl)};
+    }
+
+    private async persistPromotionReceipt(
+        file:TFile,plan:StandalonePlan,requestUid:string,receipt:PromotionReceipt
+    ):Promise<void> {
+        const raw=await this.app.vault.read(file);
+        const match=/^## Email body\s*$/im.exec(raw);
+        if(!match||raw.slice(match.index+match[0].length).trim()!==plan.body){
+            throw Error("Local Markdown changed; server Campaign may exist. No overwrite.");
+        }
+        await this.app.fileManager.processFrontMatter(file,fm=>{
+            if(fm.site_uid!==plan.siteUid ||
+               fm.hakisend_remote_email_draft_uid!==plan.draftUid ||
+               fm.hakisend_remote_email_revision!==plan.revision ||
+               fm.hakisend_remote_email_status!=="private_draft" ||
+               fm.email_subject!==plan.subject ||
+               (fm.email_preheader??"")!==plan.preheader ||
+               fm.hakisend_acelle_promotion_request_uid!==requestUid ||
+               (fm.hakisend_acelle_campaign_uid &&
+                fm.hakisend_acelle_campaign_uid!==receipt.campaign_uid)) {
+                throw Error("Local source metadata changed after promotion.");
+            }
+            fm.hakisend_acelle_campaign_uid=receipt.campaign_uid;
+            fm.hakisend_acelle_campaign_status="new_draft_not_sent";
+        });
+    }
+
+    private async openManualPrivateDraftPromotion():Promise<void> {
+        try{
+            const context=await this.promotionContext();
+            const {file,raw,plan,fields,token,origin}=context;
+            if(fields.hakisend_acelle_promotion_request_uid||
+               fields.hakisend_acelle_campaign_uid) {
+                throw Error("Existing promotion request: use receipt recovery, never another POST.");
+            }
+            new HakiSendManualPromotionModal(this.app,plan,async sender=>{
+                if(await this.app.vault.read(file)!==raw) {
+                    throw Error("Local note changed while confirmation was open.");
+                }
+                const uid=uuidV4(); // stable local identity BEFORE any HTTP POST
+                await explicitlyPromotePrivateDraft(plan,uid,sender,{
+                    getSourceDraft:draftUid=>requestPrivateDraft<unknown>(
+                        req=>requestUrl(req),origin,plan.siteUid,token,
+                        "drafts/"+draftUid,"GET"
+                    ),
+                    persistRequestUid:async requestUid=>{
+                        await this.app.fileManager.processFrontMatter(file,fm=>{
+                            if(fm.site_uid!==plan.siteUid ||
+                               fm.hakisend_remote_email_draft_uid!==plan.draftUid ||
+                               fm.hakisend_remote_email_revision!==plan.revision ||
+                               fm.hakisend_remote_email_status!=="private_draft" ||
+                               fm.email_subject!==plan.subject ||
+                               (fm.email_preheader??"")!==plan.preheader ||
+                               fm.hakisend_acelle_promotion_request_uid ||
+                               fm.hakisend_acelle_campaign_uid) {
+                                throw Error("Promotion identity or source changed locally.");
+                            }
+                            fm.hakisend_acelle_promotion_request_uid=requestUid;
+                        });
+                    },
+                    submit:(requestUid,revision,from)=>requestPromotion(
+                        req=>requestUrl(req),origin,plan.siteUid,plan.draftUid,
+                        requestUid,token,"POST",revision,from
+                    ),
+                    getReceipt:requestUid=>requestPromotion(
+                        req=>requestUrl(req),origin,plan.siteUid,plan.draftUid,
+                        requestUid,token,"GET"
+                    ),
+                    persistVerifiedReceipt:result=>this.persistPromotionReceipt(
+                        file,plan,uid,result
+                    ),
+                });
+            }).open();
+        }catch{
+            new Notice("Promotion unavailable: use a verified Standalone Private Draft with no existing promotion request. No Campaign was created by this command.");
+        }
+    }
+
+    private async recoverManualPrivatePromotion():Promise<void> {
+        try{
+            const {file,plan,fields,token,origin}=await this.promotionContext();
+            const requestUid=fields.hakisend_acelle_promotion_request_uid;
+            if(typeof requestUid!=="string"||!requestUid){
+                throw Error("No saved promotion request identity. Do not guess a new one.");
+            }
+            await explicitlyRecoverPrivatePromotion(plan,requestUid,{
+                getReceipt:uid=>requestPromotion(
+                    req=>requestUrl(req),origin,plan.siteUid,plan.draftUid,
+                    uid,token,"GET"
+                ),
+                persistVerifiedReceipt:result=>this.persistPromotionReceipt(
+                    file,plan,requestUid,result
+                ),
+            });
+            new Notice("Campaign Draft receipt verified on HakiSend. NOT sent or scheduled.");
+        }catch{
+            new Notice("No verified unsent Campaign receipt available. Nothing was sent or changed remotely; check HakiSend before taking another action.");
         }
     }
 
