@@ -12,6 +12,9 @@ export interface CalendarSource {
   serverConfirmed: boolean;
   scheduledAtUtcMs: number | null;
   linkedPostUid?: string;
+  title?: string;
+  publicVisibility?: 'not_attested' | 'verified_live';
+  sendAuthorized?: false;
 }
 export interface CalendarEntry extends CalendarSource {
   effectiveAtUtcMs: number | null;
