@@ -2,7 +2,7 @@ name: Build and test HakiSend Publisher (non-production)
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, feature/multisite-calendar-sync-design-20261010 ]
   push:
     branches:
       - feature/multisite-calendar-sync-design-20261010
