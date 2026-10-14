@@ -13,6 +13,11 @@ import { Modal,
 
 import {requestPrivateDraft} from "./email/hakisend-draft-api";
 import {parsePrivateDraftList, parsePrivateDraftDetail, type PrivateDraftListRow, type PrivateDraftReadOnlyDetail} from "./email/private-draft-list";
+import {
+    parseStandalonePlan, isAudience, isRevisionConflict, canAdoptRevision,
+    decorateLocalPlan, type StandalonePlan, type Audience,
+} from "./email/private-draft-contract";
+import {explicitlySavePrivateDraft} from "./email/explicit-private-draft-save";
 
 /**
  * Fuzzy search across existing folders. Searching by path is more reliable
@@ -1679,6 +1684,111 @@ class HakiSendPrivateEmailBrowserModal extends Modal {
     }
 }
 
+
+/** Manual Standalone Email Private Draft Save. Never sends, schedules or pulls notes. */
+class HakiSendManualDraftSaveModal extends Modal {
+    private selectedListUid = "";
+    private busy = false;
+
+    constructor(
+        app: App,
+        private readonly plan: StandalonePlan,
+        private readonly authorizedAudiences: readonly Audience[],
+        private readonly onSave: (listUid: string) => Promise<void>
+    ) {
+        super(app);
+        this.selectedListUid = plan.listUid;
+    }
+
+    onOpen(): void {
+        const c = this.contentEl;
+        c.empty();
+        c.createEl("h2", {text:"Save Standalone Email · Private Draft"});
+        c.createEl("p", {
+            text:"This is an explicit save to your own HakiSend Site. It will NOT send, schedule, publish or import any email."
+        });
+        c.createEl("p", {text:"Subject: "+this.plan.subject});
+        c.createEl("p", {text:this.plan.draftUid
+            ? "Existing Private Draft · expected revision "+this.plan.revision
+            : "New Private Draft · request UID preserved for safe recovery"});
+        new Setting(c)
+            .setName("Authorized Email audience")
+            .setDesc("Only a list enabled for this Site may be selected. A saved Draft's audience cannot change.")
+            .addDropdown(dropdown => {
+                dropdown.addOption("", "Choose an audience");
+                for (const item of this.authorizedAudiences) {
+                    dropdown.addOption(item.uid, item.name);
+                }
+                dropdown.setValue(this.authorizedAudiences.some(a => a.uid === this.selectedListUid)
+                    ? this.selectedListUid : "");
+                dropdown.onChange(value => {this.selectedListUid=value;});
+            });
+        new Setting(c)
+            .addButton(button => button
+                .setButtonText("Cancel")
+                .onClick(() => this.close()))
+            .addButton(button => button
+                .setButtonText("Save Private Draft — NOT sent")
+                .setCta()
+                .onClick(async () => {
+                    if (this.busy) return;
+                    if (!this.authorizedAudiences.some(a => a.uid===this.selectedListUid)) {
+                        new Notice("Choose an authorized audience.");
+                        return;
+                    }
+                    this.busy=true;button.setDisabled(true);
+                    try {
+                        await this.onSave(this.selectedListUid);
+                        this.close();
+                        new Notice("Private Email Draft verified on HakiSend. NOT sent or scheduled.");
+                    } catch {
+                        new Notice("Private Draft save could not be verified. Inspect the server Draft before retrying. No automatic retry.");
+                    } finally {
+                        this.busy=false;button.setDisabled(false);
+                    }
+                }));
+    }
+    onClose():void {this.contentEl.empty();}
+}
+
+class HakiSendManualDraftConflictModal extends Modal {
+    private acknowledged=false;
+    private busy=false;
+    constructor(
+        app:App,
+        private readonly plan:StandalonePlan,
+        private readonly remote:PrivateDraftReadOnlyDetail,
+        private readonly acceptRevision:()=>Promise<void>
+    ){super(app);}
+    onOpen():void {
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"Private Draft conflict · read-only comparison"});
+        c.createEl("p",{text:"Local base revision "+this.plan.revision+" differs from server revision "+this.remote.revision+". Nothing has been overwritten."});
+        c.createEl("h3",{text:"Local Markdown (unchanged)"});
+        c.createEl("pre",{text:this.plan.body});
+        c.createEl("h3",{text:"HakiSend server Markdown (read-only)"});
+        c.createEl("pre",{text:this.remote.body});
+        c.createEl("p",{text:"Merge content manually in the local note. Accepting the revision only updates local revision metadata; it never saves to HakiSend."});
+        new Setting(c)
+            .setName("I compared both versions and handled all differences in my note")
+            .addToggle(t=>t.setValue(false).onChange(v=>{this.acknowledged=v;}));
+        new Setting(c)
+            .addButton(b=>b.setButtonText("Close without changes").onClick(()=>this.close()))
+            .addButton(b=>b.setButtonText("Accept revision for NEXT manual save").onClick(async()=>{
+                if(!this.acknowledged||this.busy){new Notice("Review both versions and acknowledge first.");return;}
+                this.busy=true;b.setDisabled(true);
+                try{
+                    await this.acceptRevision();
+                    this.close();
+                    new Notice("Only local revision metadata updated. No server write. Review the note before another manual Save.");
+                }catch{
+                    new Notice("Could not accept the remote revision; verify both versions again.");
+                }finally{this.busy=false;b.setDisabled(false);}
+            }));
+    }
+    onClose():void {this.contentEl.empty();}
+}
+
 export default class HakiSendPublisherPlugin
     extends Plugin
 {
@@ -1755,6 +1865,14 @@ export default class HakiSendPublisherPlugin
         });
 
         this.addCommand({
+            id: "save-standalone-email-private-draft",
+            name: "HakiSend: Save Standalone Email as Private Draft (NOT sent)",
+            callback: async () => {
+                await this.openManualPrivateDraftSave();
+            },
+        });
+
+        this.addCommand({
             id: "browse-private-email-drafts",
             name: "HakiSend: Browse Private Email Drafts (read-only)",
             callback: () => {
@@ -1807,6 +1925,137 @@ export default class HakiSendPublisherPlugin
             );
 
         this.addSettingTab(this.settingTab);
+    }
+
+
+    private async openManualPrivateDraftSave():Promise<void> {
+        try {
+            const file=this.app.workspace.getActiveFile();
+            if(!file || file.extension!=="md") throw Error("Open a Standalone Email Plan.");
+            const fields={
+                ...(this.app.metadataCache.getFileCache(file)?.frontmatter ?? {})
+            } as Record<string,unknown>;
+            const originalRaw=await this.app.vault.read(file);
+            const plan=parseStandalonePlan(file,fields,originalRaw);
+            if(!this.settings.sites.some(s=>s.uid===plan.siteUid)) {
+                throw Error("Email Site is not in the connected account's Site list.");
+            }
+            const token=await this.getAccessToken();
+            if(!token || !this.hasSecureConnection()) throw Error("Secure OAuth Email connection required.");
+            const apiOrigin=normalizeBaseUrl(this.settings.apiBaseUrl);
+            const requester=(suffix:string,method:"GET"|"POST"|"PUT"="GET",payload?:Record<string,unknown>)=>
+                requestPrivateDraft<unknown>(
+                    req=>requestUrl(req),apiOrigin,plan.siteUid,token,suffix,method,payload
+                );
+            const rawAudiences=await requester("audiences");
+            if(!Array.isArray(rawAudiences) || rawAudiences.length>500
+                || !rawAudiences.every(isAudience)) {
+                throw Error("Cannot verify available Email audiences.");
+            }
+            const audiences:Audience[]=rawAudiences;
+            new HakiSendManualDraftSaveModal(this.app,plan,audiences,async chosenListUid=>{
+                // Explicit user selection, fresh current-note check immediately
+                // before the first possible remote write.
+                if(await this.app.vault.read(file)!==originalRaw) {
+                    throw Error("Local note changed since the save confirmation opened.");
+                }
+                const newUid=plan.requestUid||uuidV4();
+                try {
+                    await explicitlySavePrivateDraft({
+                        plan,authorizedAudiences:audiences,
+                        selectedAudienceUid:chosenListUid,
+                        newRequestUid:newUid,
+                        io:{
+                            persistCreateIdentity:async (requestUid,audienceUid)=>{
+                                await this.app.fileManager.processFrontMatter(file,fm=>{
+                                    if(fm.site_uid!==plan.siteUid ||
+                                        fm.email_subject!==plan.subject ||
+                                        (fm.email_preheader??"")!==plan.preheader ||
+                                        !!fm.hakisend_remote_email_draft_uid ||
+                                        (fm.hakisend_remote_email_request_uid &&
+                                         fm.hakisend_remote_email_request_uid!==requestUid) ||
+                                        (fm.email_list_uid && fm.email_list_uid!==audienceUid)) {
+                                        throw Error("Local Email identity changed.");
+                                    }
+                                    fm.hakisend_remote_email_request_uid=requestUid;
+                                    fm.email_list_uid=audienceUid;
+                                });
+                            },
+                            getRemoteDraft:uid=>requester("drafts/"+uid),
+                            mutateRemote:m=>requester(m.suffix,m.method,m.payload),
+                            persistVerifiedReceipt:async verified=>{
+                                const currentRaw=await this.app.vault.read(file);
+                                const match=/^## Email body\\s*$/im.exec(currentRaw);
+                                if(!match || currentRaw.slice(match.index+match[0].length).trim()!==plan.body) {
+                                    throw Error("Local note body changed; server must be reviewed manually.");
+                                }
+                                await this.app.fileManager.processFrontMatter(file,fm=>{
+                                    if(fm.site_uid!==plan.siteUid ||
+                                        fm.email_subject!==plan.subject ||
+                                        (fm.email_preheader??"")!==plan.preheader ||
+                                        fm.email_list_uid!==chosenListUid ||
+                                        (plan.draftUid
+                                            ? fm.hakisend_remote_email_draft_uid!==plan.draftUid ||
+                                              fm.hakisend_remote_email_revision!==plan.revision
+                                            : fm.hakisend_remote_email_request_uid!==newUid ||
+                                              !!fm.hakisend_remote_email_draft_uid)) {
+                                        throw Error("Local Email metadata changed during HTTP save.");
+                                    }
+                                    fm.hakisend_remote_email_draft_uid=verified.uid;
+                                    fm.hakisend_remote_email_revision=verified.revision;
+                                    fm.hakisend_remote_email_status="private_draft";
+                                });
+                                await this.app.vault.process(file,raw=>{
+                                    const heading=/^## Email body\\s*$/im.exec(raw);
+                                    if(!heading || raw.slice(heading.index+heading[0].length).trim()!==plan.body) {
+                                        throw Error("Local Markdown changed while updating verified callout.");
+                                    }
+                                    return decorateLocalPlan(raw,verified.revision);
+                                });
+                            }
+                        }
+                    });
+                }catch(error){
+                    if(isRevisionConflict(error) && !!plan.draftUid) {
+                        let remote:PrivateDraftReadOnlyDetail;
+                        try {
+                            remote=parsePrivateDraftDetail(
+                                await requester("drafts/"+plan.draftUid),plan.draftUid
+                            );
+                        }catch{throw error;}
+                        new HakiSendManualDraftConflictModal(this.app,plan,remote,async()=>{
+                            const fresh=parsePrivateDraftDetail(
+                                await requester("drafts/"+plan.draftUid),plan.draftUid
+                            );
+                            if(!canAdoptRevision(plan.draftUid,plan.revision,{
+                                uid:fresh.uid,revision:fresh.revision,status:"private_draft",
+                                send_enabled:false,subject:fresh.subject
+                            },remote.revision)){
+                                throw Error("Remote revision changed again.");
+                            }
+                            const currentRaw=await this.app.vault.read(file);
+                            const heading=/^## Email body\\s*$/im.exec(currentRaw);
+                            if(!heading || currentRaw.slice(heading.index+heading[0].length).trim()!==plan.body) {
+                                throw Error("Local content changed during conflict review.");
+                            }
+                            await this.app.fileManager.processFrontMatter(file,fm=>{
+                                if(fm.site_uid!==plan.siteUid ||
+                                    fm.hakisend_remote_email_draft_uid!==plan.draftUid ||
+                                    fm.hakisend_remote_email_revision!==plan.revision) {
+                                    throw Error("Local Draft identity changed.");
+                                }
+                                fm.hakisend_remote_email_revision=fresh.revision;
+                                // Do not mark it saved; the user must manually merge
+                                // and initiate another explicit Save.
+                            });
+                        }).open();
+                    }
+                    throw error;
+                }
+            }).open();
+        }catch{
+            new Notice("Standalone Private Draft unavailable. Open a valid Email Plan and verify your secure connection and Site permissions.");
+        }
     }
 
     private async loadSettings(): Promise<void> {
