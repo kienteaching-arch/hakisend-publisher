@@ -2240,8 +2240,7 @@ export default class HakiSendPublisherPlugin
         const file=this.app.workspace.getActiveFile();
         if(!file||file.extension!=="md")throw Error("Open a saved Standalone Email Plan.");
         const raw=await this.app.vault.read(file);
-        const fields={...(this.app.metadataCache.getFileCache(file)?.frontmatter??{})}
-            as Record<string,unknown>;
+        const fields={...(this.app.metadataCache.getFileCache(file)?.frontmatter??{})} as Record<string,unknown>;
         const plan=parseStandalonePlan(file,fields,raw);
         if(!plan.draftUid||!plan.revision||
            fields.hakisend_remote_email_status!=="private_draft") {
