@@ -2027,7 +2027,7 @@ export default class HakiSendPublisherPlugin
                             const fresh=parsePrivateDraftDetail(
                                 await requester("drafts/"+plan.draftUid),plan.draftUid
                             );
-                            if(!canAdoptRevision(plan.draftUid,plan.revision,{
+                            if(!canAdoptRevision(plan.draftUid,plan.revision??0,{
                                 uid:fresh.uid,revision:fresh.revision,status:"private_draft",
                                 send_enabled:false,subject:fresh.subject
                             },remote.revision)){
