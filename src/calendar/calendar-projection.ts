@@ -27,6 +27,11 @@ export function projectCalendar(items: readonly CalendarSource[]): CalendarEntry
     if (!validTime(item.scheduledAtUtcMs)) return {...item,effectiveAtUtcMs:null,blockedReason:'INVALID_TIME'};
     if (!item.serverConfirmed) return {...item,effectiveAtUtcMs:null,blockedReason:'UNCONFIRMED_LOCAL_STATE'};
     if (item.kind !== 'post_linked_email') return {...item,effectiveAtUtcMs:item.scheduledAtUtcMs};
+    // A Post-linked Campaign still in draft is NOT enrolled for delivery.
+    // Its linked Post clock must never fabricate a scheduled Email event.
+    if (item.status === 'draft' || item.status === 'cancelled' || item.status === 'failed' || item.status === 'ambiguous') {
+      return {...item,effectiveAtUtcMs:null,blockedReason:'LINKED_EMAIL_NOT_ENROLLED'};
+    }
     if (!item.linkedPostUid) return {...item,effectiveAtUtcMs:null,blockedReason:'MISSING_LINKED_POST'};
     const post = posts.get(item.siteUid + ':' + item.linkedPostUid);
     if (!post) return {...item,effectiveAtUtcMs:null,blockedReason:'LINKED_POST_NOT_CONFIRMED'};
