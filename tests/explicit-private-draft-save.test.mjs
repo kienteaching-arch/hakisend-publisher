@@ -90,18 +90,21 @@ test('missing UID or invalid entropy source forbids first POST',async()=>{
 });
 test('PUT does current revision GET before writing, then verified GET after',async()=>{
   const h=harness({draft:serverDraft(3)});
+  let latestRevision=3;
   const result=await explicitlySavePrivateDraft({
     plan:{...BASE,draftUid:DRAFT,revision:3,requestUid:REQUEST},
     selectedAudienceUid:'list_one',authorizedAudiences:audiences,
     io:{
       ...h.io,
+      getRemoteDraft:async uid=>{
+        h.order.push('GET');
+        assert.equal(uid,DRAFT);
+        return serverDraft(latestRevision);
+      },
       mutateRemote:async mutation=>{
         h.order.push(mutation.method);
         assert.equal(mutation.payload.revision,3);
-        h.io.getRemoteDraft=async uid=>{
-          h.order.push('GET');
-          assert.equal(uid,DRAFT);return serverDraft(4);
-        };
+        latestRevision=4;
         return serverDraft(4);
       }
     }
