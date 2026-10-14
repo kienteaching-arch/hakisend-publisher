@@ -18,6 +18,7 @@ import {
     decorateLocalPlan, type StandalonePlan, type Audience,
 } from "./email/private-draft-contract";
 import {explicitlySavePrivateDraft} from "./email/explicit-private-draft-save";
+import {buildCalendarReadRequest, validateHakiSendCalendar, type ValidatedCalendarSnapshot} from "./calendar/server-calendar-contract";
 
 /**
  * Fuzzy search across existing folders. Searching by path is more reliable
@@ -1789,6 +1790,87 @@ class HakiSendManualDraftConflictModal extends Modal {
     onClose():void {this.contentEl.empty();}
 }
 
+
+/**
+ * Opt-in owner-scoped Calendar viewer. The backend candidate route is OFF by
+ * default and may return 503. The UI must never turn authoring timestamps
+ * into confirmed public visibility or Email send authorization.
+ */
+class HakiSendReadOnlyCalendarModal extends Modal {
+    private siteUid="";
+    private seq=0;
+    constructor(
+        app:App,
+        private readonly sites:readonly HakiSendSite[],
+        private readonly loadCalendar:(siteUid:string)=>Promise<ValidatedCalendarSnapshot>
+    ){super(app);}
+    onOpen():void{
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"HakiSend Unified Calendar · read-only"});
+        c.createEl("p",{text:"Calendar shows server authoring state, NOT public visibility or send permission. The backend candidate is disabled until acceptance."});
+        const view=c.createDiv();
+        new Setting(c)
+            .setName("Site")
+            .setDesc("Choose a Site, then manually refresh. No background polling.")
+            .addDropdown(d=>{
+                d.addOption("","Choose Site");
+                for(const site of this.sites)d.addOption(site.uid,site.name);
+                d.onChange(uid=>{this.siteUid=uid;this.seq++;view.empty();});
+            });
+        new Setting(c).addButton(b=>b.setButtonText("Load Calendar (GET only)")
+            .onClick(async()=>{
+                if(!this.siteUid || !this.sites.some(s=>s.uid===this.siteUid)){
+                    new Notice("Choose a Site.");return;
+                }
+                const selected=this.siteUid;
+                const seq=++this.seq;
+                view.empty();
+                view.createEl("p",{text:"Reading server Calendar..."});
+                try {
+                    const snapshot=await this.loadCalendar(selected);
+                    if(seq!==this.seq || selected!==this.siteUid)return;
+                    view.empty();
+                    const cal=snapshot.calendar;
+                    view.createEl("p",{text:"Timezone: "+cal.timezone+" · Server-confirmed records: "+cal.serverConfirmedCount+" · NOT send authorization."});
+                    if(snapshot.truncated){
+                        view.createEl("p",{text:"Partial Calendar only: backend limit reached. Other events may exist."});
+                    }
+                    for(const day of cal.days){
+                        view.createEl("h3",{text:day.localDate});
+                        const list=view.createEl("ul");
+                        for(const item of day.entries){
+                            const display=item.effectiveAtUtcMs===null
+                                ? "time not confirmed"
+                                : new Date(item.effectiveAtUtcMs).toLocaleTimeString("en-GB",{
+                                    timeZone:cal.timezone,hour:"2-digit",minute:"2-digit"
+                                });
+                            const visibility=item.kind==="post" ? " · authoring only / public visibility unverified":"";
+                            list.createEl("li",{text:display+" · "+(item.title??item.uid)+" · "+item.kind+" · "+item.status+visibility});
+                        }
+                    }
+                    view.createEl("h3",{text:"Unscheduled"});
+                    const unscheduled=view.createEl("ul");
+                    for(const item of cal.unscheduled){
+                        unscheduled.createEl("li",{text:(item.title??item.uid)+" · "+item.kind+" · "+item.status+" · no verified delivery time"});
+                    }
+                    view.createEl("h3",{text:"Blocked / unverified"});
+                    const blocked=view.createEl("ul");
+                    for(const item of cal.blocked){
+                        blocked.createEl("li",{text:(item.title??item.uid)+" · "+(item.blockedReason??"not confirmed")+" · NOT scheduled"});
+                    }
+                    if(!cal.days.length && !cal.unscheduled.length && !cal.blocked.length){
+                        view.createEl("p",{text:"No Calendar events returned for the chosen Site."});
+                    }
+                }catch{
+                    if(seq!==this.seq)return;
+                    view.empty();
+                    view.createEl("p",{text:"Server Calendar is unavailable or not yet enabled for this Site. No schedule was changed."});
+                }
+            }));
+    }
+    onClose():void{this.seq++;this.contentEl.empty();}
+}
+
 export default class HakiSendPublisherPlugin
     extends Plugin
 {
@@ -1869,6 +1951,26 @@ export default class HakiSendPublisherPlugin
             name: "HakiSend: Save Standalone Email as Private Draft (NOT sent)",
             callback: async () => {
                 await this.openManualPrivateDraftSave();
+            },
+        });
+
+        this.addCommand({
+            id: "view-unified-calendar-readonly",
+            name: "HakiSend: View Unified Calendar (read-only candidate)",
+            callback: () => {
+                new HakiSendReadOnlyCalendarModal(
+                    this.app,this.settings.sites,async siteUid=>{
+                        const token=await this.getAccessToken();
+                        if(!token || !this.hasSecureConnection())throw Error("OAuth required.");
+                        const request=buildCalendarReadRequest(
+                            normalizeBaseUrl(this.settings.apiBaseUrl),siteUid,token,50
+                        );
+                        const response=await requestUrl({...request,throw:false});
+                        if(response.status!==200)throw Error("Calendar read unavailable.");
+                        const tz=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";
+                        return validateHakiSendCalendar(response.json,siteUid,tz);
+                    }
+                ).open();
             },
         });
 
