@@ -11,6 +11,9 @@ import { Modal,
     requestUrl,
 } from "obsidian";
 
+import {requestPrivateDraft} from "./email/hakisend-draft-api";
+import {parsePrivateDraftList, type PrivateDraftListRow} from "./email/private-draft-list";
+
 /**
  * Fuzzy search across existing folders. Searching by path is more reliable
  * than typing a folder by hand, and works in desktop and mobile Obsidian.
@@ -1569,6 +1572,90 @@ class HakiSendScheduleModal
     }
 }
 
+/**
+ * Explicit read-only Private Email Draft browser for the development source.
+ * Never writes Vault files, schedules Campaigns, or automatically fetches.
+ * The existing Sites API has a hard 50-row bound and NO pagination cursor.
+ */
+class HakiSendPrivateEmailBrowserModal extends Modal {
+    private siteUid = "";
+    private sequence = 0;
+    constructor(
+        app: App,
+        private readonly sites: readonly HakiSendSite[],
+        private readonly loadRows: (siteUid: string) => Promise<PrivateDraftListRow[]>
+    ) {
+        super(app);
+    }
+
+    onOpen(): void {
+        const {contentEl} = this;
+        contentEl.empty();
+        contentEl.createEl("h2", {text:"Private Standalone Email Drafts"});
+        contentEl.createEl("p", {
+            text:"Read-only server view. Nothing will be sent, scheduled, synced, or copied into your Vault."
+        });
+        const results = contentEl.createDiv();
+        new Setting(contentEl)
+            .setName("HakiSend Site")
+            .setDesc("Choose a Site explicitly; emails from other Sites are never requested.")
+            .addDropdown(dropdown => {
+                dropdown.addOption("", "Choose Site");
+                for (const site of this.sites) {
+                    dropdown.addOption(site.uid, site.name);
+                }
+                dropdown.onChange(value => {
+                    this.siteUid = value;
+                    this.sequence++;
+                    results.empty();
+                });
+            });
+        new Setting(contentEl)
+            .addButton(button => button
+                .setButtonText("Load private drafts")
+                .onClick(async () => {
+                    if (!this.siteUid || !this.sites.some(s => s.uid === this.siteUid)) {
+                        new Notice("Choose an authorized HakiSend Site.");
+                        return;
+                    }
+                    const chosen = this.siteUid;
+                    const current = ++this.sequence;
+                    results.empty();
+                    results.createEl("p", {text:"Loading private Email Draft metadata..."});
+                    try {
+                        const rows = await this.loadRows(chosen);
+                        if (current !== this.sequence || chosen !== this.siteUid) return;
+                        results.empty();
+                        results.createEl("p", {
+                            text: rows.length
+                                ? "Only unsent private Draft metadata is shown."
+                                : "No accessible private Email Drafts were returned."
+                        });
+                        const list = results.createEl("ul");
+                        for (const row of rows) {
+                            const item = list.createEl("li");
+                            item.createEl("strong", {text:row.subject});
+                            item.createSpan({text:" · Revision "+row.revision+" · Private Draft — NOT sent"});
+                        }
+                        results.createEl("p", {
+                            text:"HakiSend returns at most 50 records and does not provide a cursor. This view may be incomplete."
+                        });
+                    } catch {
+                        if (current !== this.sequence) return;
+                        results.empty();
+                        results.createEl("p", {
+                            text:"Cannot read this Site's private drafts. Check connection, permissions, or network."
+                        });
+                    }
+                }));
+    }
+
+    onClose(): void {
+        this.sequence++;
+        this.contentEl.empty();
+    }
+}
+
 export default class HakiSendPublisherPlugin
     extends Plugin
 {
@@ -1641,6 +1728,31 @@ export default class HakiSendPublisherPlugin
             name: "HakiSend: Schedule",
             callback: () => {
                 this.openScheduleCurrentNote();
+            },
+        });
+
+        this.addCommand({
+            id: "browse-private-email-drafts",
+            name: "HakiSend: Browse Private Email Drafts (read-only)",
+            callback: () => {
+                new HakiSendPrivateEmailBrowserModal(
+                    this.app,
+                    this.settings.sites,
+                    async siteUid => {
+                        // The Site was explicitly selected; no background pull or write.
+                        const token = await this.getAccessToken();
+                        if (!token) throw Error("Connection required.");
+                        const data = await requestPrivateDraft<unknown>(
+                            request => requestUrl(request),
+                            normalizeBaseUrl(this.settings.apiBaseUrl),
+                            siteUid,
+                            token,
+                            "drafts",
+                            "GET"
+                        );
+                        return parsePrivateDraftList(data);
+                    }
+                ).open();
             },
         });
 
