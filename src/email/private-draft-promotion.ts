@@ -9,6 +9,8 @@ import {parsePrivateDraftDetail} from './private-draft-list.ts';
 import type {StandalonePlan} from './private-draft-contract.ts';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Real Acelle HasUid::generateUid() uses PHP uniqid(), not a UUID.
+const ACELLE_UID=/^[0-9a-f]{13}$/i;
 const EMAIL=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export type PromotionMethod='POST'|'GET';
 export interface PromotionTransport {
@@ -91,7 +93,7 @@ export function validatePromotionReceipt(
 ):PromotionReceipt {
   const draft=uuid(draftUid),request=uuid(requestUid);
   if(!obj(data)||data.request_uid!==request||data.private_draft_uid!==draft||
-     typeof data.campaign_uid!=='string'||!UUID.test(data.campaign_uid)||
+     typeof data.campaign_uid!=='string'||!ACELLE_UID.test(data.campaign_uid)||
      data.status!=='new'||data.source_status!=='completed'||
      data.send_enabled!==false||data.scheduled!==false||data.run_at!==null){
     throw Error('Campaign receipt is missing, ambiguous, or not an unsent Acelle Draft.');
@@ -125,7 +127,7 @@ export async function explicitlyPromotePrivateDraft(
   if(!obj(submitted)||submitted.send_enabled!==false||
      submitted.scheduled!==false||submitted.run_at!==null||
      submitted.status!=='new'||typeof submitted.campaign_uid!=='string'||
-     !UUID.test(submitted.campaign_uid)){
+     !ACELLE_UID.test(submitted.campaign_uid)){
     throw Error('Promotion outcome unknown; recover with read-only receipt GET.');
   }
   const result=validatePromotionReceipt(await io.getReceipt(uid),plan.draftUid,uid);
