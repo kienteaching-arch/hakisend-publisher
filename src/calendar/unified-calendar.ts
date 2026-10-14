@@ -3,7 +3,7 @@
  * All times are absolute UTC epoch ms; local-day grouping uses IANA zones.
  * No calendar event is a delivery authorization.
  */
-import {projectCalendar, type CalendarSource, type CalendarEntry} from './calendar-projection';
+import {projectCalendar, type CalendarSource, type CalendarEntry} from './calendar-projection.ts';
 
 export interface CalendarDay {
   localDate: string;
