@@ -43,11 +43,21 @@ reconciled. Preserve the source gate until a matched TypeScript port is tested.
   and provenance tests. CI builds the dev bundle but **withholds release
   packaging** absent source reconciliation and owner authorization.
 
-**Not yet implemented**: Obsidian view/menu integration of Calendar and
-Sync All, per-Post selection workflow, local backup and restore mechanics,
-remote server Calendar API, lossless change-feed and tombstone handling,
-actual conditional update route, verified send-and-schedule service or
-production install package.
+**Implemented in this development iteration (NOT UAT):** a manually opened,
+Site-scoped read-only Private Draft browser with on-demand plain-text detail;
+manual Standalone Email Draft POST/PUT with stable persisted request UID,
+revision preflight, fresh HTTP read-back and guarded local saved status;
+read-only HTTP 409 Markdown comparison plus acknowledged revision-only
+adoption; and a manually refreshed Site-scoped Calendar view consuming the
+`hks_calendar_v1` OAuth candidate GET contract. Calendar data never grants
+Email send authority. These views still need real plugin/runtime UAT.
+
+**Not yet implemented**: Sync All/per-Post menu and selection workflow,
+local backup/restore, server-installed Calendar endpoint (a real MySQL8
+route candidate exists but its feature flag is OFF), lossless change-feed
+and tombstones, a production-authorized conditional update route, actual
+send-and-schedule service, full v0.1.9 TypeScript parity, or an approved
+production installer.
 
 ## Backend reference
 
