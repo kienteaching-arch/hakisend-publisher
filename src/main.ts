@@ -21,6 +21,7 @@ import {explicitlySavePrivateDraft} from "./email/explicit-private-draft-save";
 import {explicitlyPromotePrivateDraft, explicitlyRecoverPrivatePromotion, requestPromotion, type PromotionSender, type PromotionReceipt} from "./email/private-draft-promotion";
 import {explicitlyReadDeliveryReadiness, type DeliveryReadiness} from "./email/delivery-readiness";
 import {buildCalendarReadRequest, validateHakiSendCalendar, type ValidatedCalendarSnapshot} from "./calendar/server-calendar-contract";
+import {acceptCalendarPage, buildCalendarPageRequest, type CalendarPageSession} from "./calendar/paged-calendar-contract";
 
 /**
  * Fuzzy search across existing folders. Searching by path is more reliable
@@ -2007,6 +2008,112 @@ class HakiSendReadOnlyCalendarModal extends Modal {
     onClose():void{this.seq++;this.contentEl.empty();}
 }
 
+/**
+ * Opt-in Calendar v2 pages. Every GET and every Load More click is initiated
+ * by the user. No background polling, Vault writes or delivery actions.
+ * The original v1 read-only command remains available for compatibility.
+ */
+class HakiSendPagedCalendarModal extends Modal {
+    private siteUid="";
+    private seq=0;
+    private session:CalendarPageSession|null=null;
+    private view:HTMLElement|null=null;
+    constructor(
+        app:App,
+        private readonly sites:readonly HakiSendSite[],
+        private readonly fetchPage:(siteUid:string,cursor:string|null)=>Promise<unknown>,
+    ){super(app);}
+    onOpen():void{
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"HakiSend Calendar · paged read-only candidate"});
+        c.createEl("p",{text:"Each page is loaded only when requested. Publication visibility and email delivery are not attested by this view."});
+        new Setting(c).setName("Site").setDesc("Select an authorized HakiSend Site.")
+            .addDropdown(d=>{
+                d.addOption("","Choose Site");
+                for(const site of this.sites)d.addOption(site.uid,site.name);
+                d.onChange(uid=>{
+                    this.siteUid=uid;this.seq++;this.session=null;
+                    this.view?.empty();
+                });
+            });
+        new Setting(c).addButton(b=>b.setButtonText("Load first page (GET)")
+            .onClick(async()=>{await this.load(null);}));
+        new Setting(c).addButton(b=>b.setButtonText("Load More (GET)")
+            .onClick(async()=>{
+                if(!this.session?.nextCursor){
+                    new Notice("No verified next page. Choose Load first page to refresh.");
+                    return;
+                }
+                await this.load(this.session.nextCursor);
+            }));
+        this.view=c.createDiv();
+    }
+    private async load(cursor:string|null):Promise<void>{
+        if(!this.siteUid || !this.sites.some(s=>s.uid===this.siteUid)){
+            new Notice("Choose a Site.");return;
+        }
+        const selected=this.siteUid;
+        const previous=cursor===null?null:this.session;
+        if(cursor!==null && (!previous || previous.nextCursor!==cursor)){
+            new Notice("Calendar continuation no longer matches the selected Site.");
+            return;
+        }
+        const seq=++this.seq;
+        this.view?.empty();
+        this.view?.createEl("p",{text:"Reading one verified server page..."});
+        try {
+            const payload=await this.fetchPage(selected,cursor);
+            if(seq!==this.seq || selected!==this.siteUid)return;
+            const timezone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";
+            const accepted=acceptCalendarPage(payload,selected,timezone,previous);
+            this.session=accepted;
+            this.render();
+        }catch{
+            if(seq!==this.seq || selected!==this.siteUid)return;
+            this.view?.empty();
+            this.view?.createEl("p",{text:"Calendar page unavailable or unsafe. Previously verified pages remain in memory; nothing was changed on HakiSend."});
+        }
+    }
+    private render():void{
+        const view=this.view;if(!view || !this.session)return;
+        view.empty();
+        const session=this.session;
+        view.createEl("p",{text:
+            "Pages loaded: "+session.pages.length+" · Records: "+
+            session.seenIdentities.length+" · READ ONLY · No email send authorization."
+        });
+        if(session.nextCursor!==null){
+            view.createEl("p",{text:"More Calendar events may exist. Click Load More to request the next verified page."});
+        }else{
+            view.createEl("p",{text:"No further events in this bounded server traversal. Existing records may change; refresh to begin again."});
+        }
+        for(let index=0;index<session.pages.length;index++){
+            const calendar=session.pages[index].calendar;
+            view.createEl("h3",{text:"Page "+(index+1)+" · "+calendar.timezone});
+            for(const day of calendar.days){
+                view.createEl("p",{text:day.localDate+" · authoring schedule only"});
+                const ul=view.createEl("ul");
+                for(const event of day.entries){
+                    ul.createEl("li",{text:(event.title??event.uid)+" · "+
+                        event.kind+" · "+event.status+" · Public/send state unverified"});
+                }
+            }
+            const unscheduled=view.createEl("ul");
+            for(const event of calendar.unscheduled){
+                unscheduled.createEl("li",{text:(event.title??event.uid)+" · "+
+                    event.kind+" · "+event.status+" · No confirmed delivery clock"});
+            }
+            for(const event of calendar.blocked){
+                unscheduled.createEl("li",{text:(event.title??event.uid)+" · "+
+                    (event.blockedReason??"unverified")+" · NOT scheduled"});
+            }
+        }
+    }
+    onClose():void{
+        this.seq++;this.session=null;this.view=null;this.contentEl.empty();
+    }
+}
+
 export default class HakiSendPublisherPlugin
     extends Plugin
 {
@@ -2122,6 +2229,26 @@ export default class HakiSendPublisherPlugin
                         if(response.status!==200)throw Error("Calendar read unavailable.");
                         const tz=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";
                         return validateHakiSendCalendar(response.json,siteUid,tz);
+                    }
+                ).open();
+            },
+        });
+
+        this.addCommand({
+            id: "view-unified-calendar-paged-readonly",
+            name: "HakiSend: View Paged Calendar v2 (read-only candidate)",
+            callback: () => {
+                new HakiSendPagedCalendarModal(
+                    this.app,this.settings.sites,async (siteUid,cursor)=>{
+                        const token=await this.getAccessToken();
+                        if(!token || !this.hasSecureConnection())throw Error("OAuth required.");
+                        const request=buildCalendarPageRequest(
+                            normalizeBaseUrl(this.settings.apiBaseUrl),siteUid,
+                            token,50,cursor
+                        );
+                        const response=await requestUrl({...request,throw:false});
+                        if(response.status!==200)throw Error("Calendar page unavailable.");
+                        return response.json;
                     }
                 ).open();
             },
