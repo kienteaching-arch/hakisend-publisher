@@ -47,6 +47,20 @@ function validUuid(value: unknown): value is string {
 }
 function byteLength(value: string): number { return encoder.encode(value).length; }
 
+/**
+ * Single authoritative parser for the local Standalone Email body.
+ * The previous integration accidentally used /\\\\s/ in three places,
+ * matching a literal backslash instead of whitespace and producing false
+ * "local content changed" after the server had already saved the Draft.
+ * Keep readback, conflict and promotion checks aligned with plan parsing.
+ */
+export function extractStandaloneEmailBody(markdown: string): string {
+  if (typeof markdown !== 'string') throw Error('Invalid local Email Markdown.');
+  const marker = /^## Email body\\s*$/im.exec(markdown);
+  if (!marker) throw Error('Email body heading is missing. Create a local Standalone Email Plan first.');
+  return markdown.slice(marker.index + marker[0].length).trim();
+}
+
 export function parseStandalonePlan(file: NoteRef, fields: PlanFields, markdown: string): StandalonePlan {
   if (!file || typeof file.path !== 'string' || !file.path.startsWith(ROOT) || file.extension !== 'md') {
     throw Error('Open an Email Plan in the HakiSend Emails folder.');
@@ -64,9 +78,7 @@ export function parseStandalonePlan(file: NoteRef, fields: PlanFields, markdown:
   }
   const preheader = fields.email_preheader == null ? '' : fields.email_preheader;
   if (typeof preheader !== 'string' || byteLength(preheader) > 255) throw Error('Invalid preheader.');
-  const marker = /^## Email body\s*$/im.exec(markdown);
-  if (!marker) throw Error('Email body heading is missing. Create a local Standalone Email Plan first.');
-  const body = markdown.slice(marker.index + marker[0].length).trim();
+  const body = extractStandaloneEmailBody(markdown);
   if (!body || body.includes('Write the standalone email here.') || byteLength(body) > 200000 || body.includes('\0')) {
     throw Error('Replace the placeholder under "## Email body" with actual Markdown before saving.');
   }
