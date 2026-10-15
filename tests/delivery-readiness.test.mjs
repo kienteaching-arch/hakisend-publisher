@@ -21,6 +21,12 @@ const data={
   contract_version:'hks_delivery_readiness_v1',site_uid:SITE,draft_uid:DRAFT,
   request_uid:REQ,campaign_uid:CAMPAIGN,campaign_state:'new',
   checks:Object.fromEntries(checkKeys.map(x=>[x,true])),
+  audience_status_counts:{
+    source:'owner_list_status_snapshot',
+    subscribed:2,unsubscribed:1,blacklisted:1,
+    spam_reported:1,unconfirmed:1,other:1,total:7,
+    consent_verified:false,suppression_verified:false,
+  },
   compliance:Object.fromEntries(complianceKeys.map(x=>[x,'unverified'])),
   ready_to_send:false,send_authorized:false,schedule_authorized:false,read_only:true,
 };
@@ -47,6 +53,8 @@ test('valid new native Campaign is explicitly NOT sendable',()=>{
   assert.equal(r.compliance.consent,'unverified');
   assert.equal(r.checks.native_unsubscribe_markup_present,true);
   assert.equal(r.compliance.unsubscribe,'unverified');
+  assert.equal(r.audience_status_counts.subscribed,2);
+  assert.equal(r.audience_status_counts.consent_verified,false);
 });
 test('rejects forged send permission, schedule or compliance',()=>{
   for(const patch of [
@@ -66,6 +74,17 @@ test('missing canonical unsubscribe markup is a failed structural check, never s
   assert.equal(r.checks.native_unsubscribe_markup_present,false);
   assert.equal(r.compliance.unsubscribe,'unverified');
   assert.equal(r.send_authorized,false);
+});
+test('aggregates do not prove opt-in or suppression and fail closed on spoofed/invalid counts',()=>{
+  for(const patch of [
+    {total:8},{subscribed:-1},{subscribed:2.5},{consent_verified:true},
+    {suppression_verified:true},{source:'global_verified'},
+    {email_address:'leak@example.test'},{other:Number.MAX_SAFE_INTEGER},
+  ]){
+    assert.throws(()=>parse({...data,
+      audience_status_counts:{...data.audience_status_counts,...patch}
+    }),/audience|aggregate|total|Untrusted/i);
+  }
 });
 test('ambiguous real Campaign is allowed as a blocked diagnostic only',()=>{
   const r=parse({...data,campaign_state:'ambiguous',
