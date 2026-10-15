@@ -56,7 +56,7 @@ function byteLength(value: string): number { return encoder.encode(value).length
  */
 export function extractStandaloneEmailBody(markdown: string): string {
   if (typeof markdown !== 'string') throw Error('Invalid local Email Markdown.');
-  const marker = /^## Email body\\s*$/im.exec(markdown);
+  const marker = /^## Email body\s*$/im.exec(markdown);
   if (!marker) throw Error('Email body heading is missing. Create a local Standalone Email Plan first.');
   return markdown.slice(marker.index + marker[0].length).trim();
 }
