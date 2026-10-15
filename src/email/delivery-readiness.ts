@@ -66,6 +66,16 @@ export interface ConsentProvenance {
   consent_audit_complete:false;
   send_authorized:false;
 }
+export interface ConsentTokenReceipts {
+  source:'token_redemption_candidate_v1';
+  state:'disabled'|'candidate_only';
+  current_subscribed_redeemed_tokens:number|null;
+  current_subscribed_withdrawn:number|null;
+  mailbox_delivery_verified:false;
+  marketing_consent_verified:false;
+  unsubscribe_hooks_verified:false;
+  send_authorized:false;
+}
 export interface DeliveryReadiness {
   contract_version:'hks_delivery_readiness_v1';
   site_uid:string;
@@ -78,6 +88,7 @@ export interface DeliveryReadiness {
   blacklist_overlap:BlacklistOverlap;
   budget_snapshot:BudgetSnapshot;
   consent_provenance:ConsentProvenance;
+  consent_token_receipts:ConsentTokenReceipts;
   compliance:Record<Guard,'unverified'>;
   ready_to_send:false;
   send_authorized:false;
@@ -132,6 +143,7 @@ export function parseDeliveryReadiness(
      !obj(d.blacklist_overlap)||
      !obj(d.budget_snapshot)||
      !obj(d.consent_provenance)||
+     !obj(d.consent_token_receipts)||
      Object.keys(d.checks).length!==CHECKS.length||
      Object.keys(d.compliance).length!==COMPLIANCE.length) {
     throw Error('Unexpected or unsafe delivery readiness evidence.');
@@ -257,6 +269,29 @@ export function parseDeliveryReadiness(
   }
   if(labeledTotal!==provenance.subscribed_total)
     throw Error('Consent provenance totals do not match subscriber status.');
+
+  const receipt=d.consent_token_receipts;
+  if(receipt.source!=='token_redemption_candidate_v1'||
+     !['disabled','candidate_only'].includes(String(receipt.state))||
+     Object.keys(receipt).length!==8 ||
+     receipt.mailbox_delivery_verified!==false||
+     receipt.marketing_consent_verified!==false||
+     receipt.unsubscribe_hooks_verified!==false||
+     receipt.send_authorized!==false) {
+    throw Error('Untrusted candidate consent receipt state.');
+  }
+  const redeemed=receipt.current_subscribed_redeemed_tokens;
+  const withdrawn=receipt.current_subscribed_withdrawn;
+  if(receipt.state==='disabled') {
+    if(redeemed!==null||withdrawn!==null)
+      throw Error('Disabled consent ledger must have unknown, not zero, counts.');
+  }else{
+    if(typeof redeemed!=='number'||!Number.isSafeInteger(redeemed)||redeemed<0||
+       typeof withdrawn!=='number'||!Number.isSafeInteger(withdrawn)||withdrawn<0||
+       redeemed+withdrawn>total) {
+      throw Error('Invalid candidate consent receipt totals.');
+    }
+  }
 
   for(const key of CHECKS)if(typeof d.checks[key]!=='boolean')
     throw Error('Missing server-side readiness check.');
