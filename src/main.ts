@@ -21,6 +21,10 @@ import {explicitlySavePrivateDraft} from "./email/explicit-private-draft-save";
 import {explicitlyPromotePrivateDraft, explicitlyRecoverPrivatePromotion, requestPromotion, type PromotionSender, type PromotionReceipt} from "./email/private-draft-promotion";
 import {explicitlyReadDeliveryReadiness, type DeliveryReadiness} from "./email/delivery-readiness";
 import {buildCalendarReadRequest, validateHakiSendCalendar, type ValidatedCalendarSnapshot} from "./calendar/server-calendar-contract";
+import {
+    normalizeLocalEmailPlan, serializeLocalEmailPlan, localEmailPlanPaths,
+    localEmailSourceContext, type LocalEmailPlannerInput
+} from "./email/local-email-planner";
 import {acceptCalendarPage, buildCalendarPageRequest, type CalendarPageSession} from "./calendar/paged-calendar-contract";
 
 /**
@@ -1581,6 +1585,187 @@ class HakiSendScheduleModal
     }
 }
 
+
+/**
+ * Source-parity port of the user's owner-tested v0.1.9 offline Email planner.
+ * It creates files in the Vault only after a deliberate Create click.
+ * There is no network call or remote Campaign side effect in either modal.
+ */
+class HakiSendLocalEmailPlannerModal extends Modal {
+    private form: LocalEmailPlannerInput;
+    private conditional: HTMLElement | null = null;
+    private busy = false;
+    constructor(
+        app: App,
+        private readonly sites: readonly HakiSendSite[],
+        defaultSiteUid: string
+    ) {
+        super(app);
+        const file=this.app.workspace.getActiveFile();
+        const fm=file ? (this.app.metadataCache.getFileCache(file)?.frontmatter ?? {}) : {};
+        const source=localEmailSourceContext(file?.path??null,file?.extension??null,
+            fm as Record<string,unknown>);
+        const siteUid=this.sites.some(s=>s.uid===source.sourceSiteUid)
+            ? source.sourceSiteUid
+            : (this.sites.some(s=>s.uid===defaultSiteUid)
+                ? defaultSiteUid : (this.sites[0]?.uid??""));
+        this.form={kind:"standalone",siteUid,subject:"",listUid:"",
+            sendPolicy:"now",scheduleInput:"",...source};
+    }
+    onOpen():void {
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"HakiSend — Create Local Email Plan"});
+        c.createEl("p",{text:"Creates a Markdown note in your Vault only. Nothing is sent, scheduled or published on HakiSend."});
+        if(this.sites.length===0){
+            c.createEl("p",{text:"Connect HakiSend and load at least one authorized Site first."});
+            return;
+        }
+        new Setting(c).setName("Site")
+            .setDesc("This Site is pinned into the local Email Plan.")
+            .addDropdown(d=>{
+                for(const site of this.sites)d.addOption(site.uid,site.name);
+                d.setValue(this.form.siteUid);
+                d.onChange(value=>{this.form.siteUid=value;});
+            });
+        new Setting(c).setName("Email type")
+            .addDropdown(d=>d
+                .addOption("standalone","Standalone Email — independent send intent")
+                .addOption("post_linked_free","Post-linked Email — after publication")
+                .setValue(this.form.kind)
+                .onChange(value=>{
+                    this.form.kind=value as LocalEmailPlannerInput["kind"];
+                    this.form.sendPolicy=value==="post_linked_free"?"on_publication":"now";
+                    this.form.scheduleInput="";
+                    this.drawConditional();
+                }));
+        new Setting(c).setName("Email subject")
+            .addText(t=>t.setPlaceholder("Email subject")
+                .onChange(value=>{this.form.subject=value;}));
+        new Setting(c).setName("Audience list UID (optional)")
+            .setDesc("This is only a local plan. HakiSend verifies audience ownership and consent later.")
+            .addText(t=>t.setPlaceholder("Authorized list UID")
+                .onChange(value=>{this.form.listUid=value;}));
+        this.conditional=c.createDiv();
+        this.drawConditional();
+        new Setting(c).addButton(b=>b
+            .setButtonText("Create LOCAL Email Plan").setCta()
+            .onClick(async()=>{
+                if(this.busy)return;
+                this.busy=true;b.setDisabled(true);
+                try{
+                    const args:LocalEmailPlannerInput={...this.form};
+                    if(args.kind==="standalone"){
+                        args.sourceNote="";
+                        args.postUid="";
+                        args.sourceSiteUid="";
+                        args.isReadOnlySnapshot=false;
+                    }else{
+                        // A different current Post or changed Site during
+                        // composition cannot silently rebind the source.
+                        const file=this.app.workspace.getActiveFile();
+                        const fm=file
+                            ? (this.app.metadataCache.getFileCache(file)?.frontmatter??{})
+                            : {};
+                        const fresh=localEmailSourceContext(
+                            file?.path??null,file?.extension??null,
+                            fm as Record<string,unknown>);
+                        if(!fresh.sourceNote ||
+                            fresh.sourceNote!==args.sourceNote ||
+                            fresh.sourceSiteUid!==args.sourceSiteUid ||
+                            fresh.postUid!==args.postUid ||
+                            fresh.isReadOnlySnapshot!==args.isReadOnlySnapshot){
+                            throw Error("The source Post changed. Reopen the Email Planner.");
+                        }
+                    }
+                    const draft=normalizeLocalEmailPlan(args);
+                    if(!this.sites.some(s=>s.uid===draft.siteUid)){
+                        throw Error("Selected HakiSend Site is no longer available.");
+                    }
+                    const paths=localEmailPlanPaths(
+                        draft.siteUid,draft.kind,draft.subject
+                    );
+                    // Exactly the owner's tested v0.1.9 folder convention.
+                    if(!this.app.vault.getAbstractFileByPath(paths.root)){
+                        await this.app.vault.createFolder(paths.root);
+                    }
+                    if(!this.app.vault.getAbstractFileByPath(paths.directory)){
+                        await this.app.vault.createFolder(paths.directory);
+                    }
+                    let created:TFile|null=null;
+                    for(let n=1;n<=1000;n++){
+                        const path=paths.directory+"/"+paths.basename+
+                            (n===1?"":" ("+n+")")+".md";
+                        if(this.app.vault.getAbstractFileByPath(path))continue;
+                        // create() is atomic: if another device created the
+                        // same name, it throws. Never overwrite that file.
+                        created=await this.app.vault.create(
+                            path,serializeLocalEmailPlan(draft)
+                        );
+                        break;
+                    }
+                    if(!created)throw Error("Too many duplicate Email Plan names.");
+                    this.close();
+                    await this.app.workspace.getLeaf(true).openFile(created);
+                    new Notice("Local Email Plan created. NOT sent or scheduled.");
+                }catch(err){
+                    const msg=err instanceof Error?err.message:"Unknown failure";
+                    new Notice("Email Plan not created: "+msg.slice(0,180));
+                }finally{
+                    this.busy=false;b.setDisabled(false);
+                }
+            }));
+        c.createEl("p",{text:"Send now and scheduled here describe future intent only. No provider action will be taken from this dialog."});
+    }
+    private drawConditional():void{
+        const c=this.conditional;if(!c)return;c.empty();
+        if(this.form.kind==="post_linked_free"){
+            c.createEl("p",{text:"Editable source Post: "+
+                (this.form.sourceNote??"")});
+            c.createEl("p",{text:"Policy: on publication only. There is no separate Email schedule, and the server must verify public guest visibility before sending."});
+        }else{
+            new Setting(c).setName("Future send policy (local intent)")
+                .addDropdown(d=>d.addOption("now","Send now — future confirmation")
+                    .addOption("scheduled","Independent future schedule")
+                    .setValue(this.form.sendPolicy==="scheduled"?"scheduled":"now")
+                    .onChange(value=>{
+                        this.form.sendPolicy=value as "now"|"scheduled";
+                        this.form.scheduleInput="";
+                        this.drawConditional();
+                    }));
+            if(this.form.sendPolicy==="scheduled"){
+                new Setting(c).setName("UTC instant or ISO 8601 with offset")
+                    .setDesc("Example: 2026-10-16T08:00:00+07:00. This does not schedule HakiSend.")
+                    .addText(t=>t.setPlaceholder("2026-10-16T08:00:00+07:00")
+                        .onChange(value=>{this.form.scheduleInput=value;}));
+            }
+        }
+    }
+    onClose():void {this.conditional=null;this.contentEl.empty();}
+}
+
+class HakiSendLocalEmailPlanBrowserModal extends Modal {
+    onOpen():void{
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"Local HakiSend Email Plans"});
+        c.createEl("p",{text:"Vault-only plans. No entry here is evidence of an actual Campaign schedule or delivery."});
+        const all=this.app.vault.getMarkdownFiles()
+            .filter(file=>file.path.startsWith("HakiSend Emails/"))
+            .sort((a,b)=>a.path.localeCompare(b.path));
+        if(all.length===0){
+            c.createEl("p",{text:"No local Email Plans found."});return;
+        }
+        for(const file of all.slice(0,100)){
+            new Setting(c).setName(file.basename)
+                .setDesc("Local only · NOT sent")
+                .addButton(b=>b.setButtonText("Open").onClick(()=>{
+                    this.close();void this.app.workspace.getLeaf(true).openFile(file);
+                }));
+        }
+        if(all.length>100)c.createEl("p",{text:"Showing 100 of "+all.length+" local notes."});
+    }
+    onClose():void{this.contentEl.empty();}
+}
+
 /**
  * Explicit read-only Private Email Draft browser for the development source.
  * Never writes Vault files, schedules Campaigns, or automatically fetches.
@@ -2187,6 +2372,24 @@ export default class HakiSendPublisherPlugin
             callback: () => {
                 this.openScheduleCurrentNote();
             },
+        });
+
+        this.addCommand({
+            id: "email-create-local-plan",
+            name: "HakiSend: Create Email Plan (local-only)",
+            callback:()=>new HakiSendLocalEmailPlannerModal(
+                this.app,this.settings.sites,this.settings.defaultSiteUid
+            ).open(),
+        });
+        this.addCommand({
+            id: "email-browse-local-plans",
+            name: "HakiSend: Browse Local Email Plans (Vault only)",
+            callback:()=>new HakiSendLocalEmailPlanBrowserModal(this.app).open(),
+        });
+        this.addRibbonIcon("mail-plus","HakiSend — Local Email Plan",()=>{
+            new HakiSendLocalEmailPlannerModal(
+                this.app,this.settings.sites,this.settings.defaultSiteUid
+            ).open();
         });
 
         this.addCommand({
