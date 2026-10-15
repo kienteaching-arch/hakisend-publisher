@@ -39,7 +39,7 @@ jobs:
       - name: Compile Obsidian development bundle (not a release)
         run: npm run build
       - name: Verify built Publisher OAuth reconnect with owner-tested v0.1.9 runtime mocks
-        run: node --test tests/runtime-email-reconnect.test.cjs
+        run: node --test --test-name-pattern='compiled Publisher installs' tests/runtime-email-reconnect.test.cjs
       - name: Verify development artifacts without packaging
         run: |
           test -s main.js
