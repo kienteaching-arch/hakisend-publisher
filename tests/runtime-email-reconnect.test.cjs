@@ -8,6 +8,8 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const Module=require('node:module');
 const path=require('node:path');
+const fs=require('node:fs');
+const os=require('node:os');
 const PUBLISHING=['sites:read','content:read','content:write',
   'publications:write','media:write'];
 const EMAIL=['email:read','email:compose'];
@@ -70,8 +72,17 @@ const original=Module._load;
 Module._load=function(name,...args){
   return name==='obsidian'?obsidian:original.call(this,name,...args);
 };
-const Main=require(path.resolve(__dirname,'../main.js')).default;
+// package.json uses "type: module" for TypeScript/Node source tests,
+// but esbuild intentionally produces CJS main.js for Obsidian. Node would
+// misinterpret the .js file as ESM when require() is called here. Load the
+// exact compiled BYTES from a temporary .cjs path instead, without changing
+// the shipped Obsidian build format or publishing an installer.
+const runtimeDir=fs.mkdtempSync(path.join(os.tmpdir(),'hakisend-cjs-ci-'));
+const runtimeBundle=path.join(runtimeDir,'main.cjs');
+fs.copyFileSync(path.resolve(__dirname,'../main.js'),runtimeBundle);
+const Main=require(runtimeBundle).default;
 assert.equal(typeof Main,'function','Obsidian development bundle exports a plugin class');
+process.on('exit',()=>{try{fs.rmSync(runtimeDir,{recursive:true,force:true});}catch{}});
 
 function reset(){
   state.opened.length=0;state.http.length=0;state.notices.length=0;
@@ -91,8 +102,12 @@ function httpScopes(scopes,{secondStatus=200,secondPayload}={}){
 async function callback(){const p=pending();await state.protocols['hakisend-connect']({state:p.state,code:'CODE'});}
 
 test('compiled Publisher installs local Email planner and secure Email reconnect, no send commands',async()=>{
- reset();
- assert.equal(typeof Main,'function');
+ reset();const p=await plugin();
+ assert(p.commands.some(c=>c.id==='email-create-local-plan'));
+ assert(p.commands.some(c=>c.id==='email-browse-local-plans'));
+ assert(p.commands.some(c=>c.id==='reconnect-email-draft-access'));
+ assert(!p.commands.some(c=>/^send-email$|^schedule-email$/.test(c.id)));
+ assert.equal(state.http.length,0);
 });
 test('legacy connect does not request Email and exact five-scope response remains accepted',async()=>{
  reset();const p=await plugin();await p.startBrowserConnect();
