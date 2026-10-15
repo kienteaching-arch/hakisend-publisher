@@ -39,6 +39,19 @@ export interface BlacklistOverlap {
   suppression_verified:false;
   recipient_send_authorized:false;
 }
+export interface BudgetSnapshot {
+  source:'acelle_cold_credit_plan_rate_snapshot_v1';
+  credit_state:'no_active_subscription'|'not_granted_in_snapshot'|'unlimited_in_snapshot'|'limited_in_snapshot';
+  credits_remaining_snapshot:number|null;
+  rate_limit_configured:boolean;
+  rate_limit_per_window:number|null;
+  rate_window_amount:number|null;
+  rate_window_unit:'second'|'minute'|'hour'|'day'|'week'|'month'|null;
+  live_credit_balance_verified:false;
+  live_rate_window_verified:false;
+  quota_verified:false;
+  send_authorized:false;
+}
 export interface DeliveryReadiness {
   contract_version:'hks_delivery_readiness_v1';
   site_uid:string;
@@ -49,6 +62,7 @@ export interface DeliveryReadiness {
   checks:Record<Check,boolean>;
   audience_status_counts:AudienceStatusCounts;
   blacklist_overlap:BlacklistOverlap;
+  budget_snapshot:BudgetSnapshot;
   compliance:Record<Guard,'unverified'>;
   ready_to_send:false;
   send_authorized:false;
@@ -101,6 +115,7 @@ export function parseDeliveryReadiness(
      d.schedule_authorized!==false||d.read_only!==true||
      !obj(d.checks)||!obj(d.compliance)||!obj(d.audience_status_counts)||
      !obj(d.blacklist_overlap)||
+     !obj(d.budget_snapshot)||
      Object.keys(d.checks).length!==CHECKS.length||
      Object.keys(d.compliance).length!==COMPLIANCE.length) {
     throw Error('Unexpected or unsafe delivery readiness evidence.');
@@ -152,6 +167,47 @@ export function parseDeliveryReadiness(
     throw Error('Blacklist overlap contradicts subscriber status totals.');
   }
 
+
+
+  const budget=d.budget_snapshot;
+  const states=['no_active_subscription','not_granted_in_snapshot',
+    'unlimited_in_snapshot','limited_in_snapshot'];
+  const units=['second','minute','hour','day','week','month'];
+  if(budget.source!=='acelle_cold_credit_plan_rate_snapshot_v1'||
+     !states.includes(String(budget.credit_state))||
+     budget.live_credit_balance_verified!==false||
+     budget.live_rate_window_verified!==false||
+     budget.quota_verified!==false||budget.send_authorized!==false||
+     Object.keys(budget).length!==11 ||
+     typeof budget.rate_limit_configured!=='boolean') {
+    throw Error('Unsafe Acelle quota snapshot attestation.');
+  }
+  if(budget.credit_state==='limited_in_snapshot') {
+    if(typeof budget.credits_remaining_snapshot!=='number'||
+       !Number.isSafeInteger(budget.credits_remaining_snapshot)||
+       budget.credits_remaining_snapshot<0) {
+      throw Error('Invalid finite credit snapshot.');
+    }
+  } else if(budget.credits_remaining_snapshot!==null) {
+    throw Error('Nonfinite credit snapshot cannot report finite remaining.');
+  }
+  if(budget.credit_state==='no_active_subscription'&&budget.rate_limit_configured) {
+    throw Error('No subscription cannot have active plan rate limit.');
+  }
+  if(budget.rate_limit_configured) {
+    if(typeof budget.rate_limit_per_window!=='number'||
+       !Number.isSafeInteger(budget.rate_limit_per_window)||
+       budget.rate_limit_per_window<0||
+       typeof budget.rate_window_amount!=='number'||
+       !Number.isSafeInteger(budget.rate_window_amount)||
+       budget.rate_window_amount<1||
+       !units.includes(String(budget.rate_window_unit))) {
+      throw Error('Invalid rate-limit plan configuration.');
+    }
+  } else if(budget.rate_limit_per_window!==null||
+            budget.rate_window_amount!==null||budget.rate_window_unit!==null) {
+    throw Error('Unconfigured rate limiter must have null configuration.');
+  }
 
   for(const key of CHECKS)if(typeof d.checks[key]!=='boolean')
     throw Error('Missing server-side readiness check.');
