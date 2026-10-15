@@ -38,6 +38,14 @@ const data={
     suppression_verified:false,
     recipient_send_authorized:false,
   },
+  budget_snapshot:{
+    source:'acelle_cold_credit_plan_rate_snapshot_v1',
+    credit_state:'no_active_subscription',
+    credits_remaining_snapshot:null,rate_limit_configured:false,
+    rate_limit_per_window:null,rate_window_amount:null,rate_window_unit:null,
+    live_credit_balance_verified:false,live_rate_window_verified:false,
+    quota_verified:false,send_authorized:false,
+  },
   compliance:Object.fromEntries(complianceKeys.map(x=>[x,'unverified'])),
   ready_to_send:false,send_authorized:false,schedule_authorized:false,read_only:true,
 };
@@ -68,6 +76,8 @@ test('valid new native Campaign is explicitly NOT sendable',()=>{
   assert.equal(r.audience_status_counts.consent_verified,false);
   assert.equal(r.blacklist_overlap.either_blacklist_overlap,1);
   assert.equal(r.blacklist_overlap.suppression_verified,false);
+  assert.equal(r.budget_snapshot.credit_state,'no_active_subscription');
+  assert.equal(r.budget_snapshot.quota_verified,false);
 });
 test('rejects forged send permission, schedule or compliance',()=>{
   for(const patch of [
@@ -119,6 +129,33 @@ test('strict local/global blacklist overlap contract, no false suppression permi
   }});
   assert.equal(allowed.compliance.suppression,'unverified');
   assert.equal(allowed.send_authorized,false);
+});
+test('plan-credit snapshot and rate limits are diagnostic only, never real-time quota',()=>{
+  const limited={...data.budget_snapshot,
+    credit_state:'limited_in_snapshot',credits_remaining_snapshot:40,
+    rate_limit_configured:true,rate_limit_per_window:100,
+    rate_window_amount:1,rate_window_unit:'hour',
+  };
+  const accepted=parse({...data,budget_snapshot:limited});
+  assert.equal(accepted.budget_snapshot.quota_verified,false);
+  assert.equal(accepted.send_authorized,false);
+  for(const bad of [
+    {quota_verified:true},{send_authorized:true},
+    {live_credit_balance_verified:true},{live_rate_window_verified:true},
+    {credits_remaining_snapshot:-1},{credits_remaining_snapshot:1.25},
+    {rate_limit_per_window:-5},{rate_window_amount:0},
+    {rate_window_unit:'forever'},{private_subscription_id:55},
+  ]){
+    assert.throws(()=>parse({...data,
+      budget_snapshot:{...limited,...bad}
+    }),/quota|credit|rate|snapshot|Unsafe/i);
+  }
+  assert.throws(()=>parse({...data,budget_snapshot:{
+    ...limited,credit_state:'unlimited_in_snapshot'
+  }}),/credit|snapshot/);
+  assert.throws(()=>parse({...data,budget_snapshot:{
+    ...data.budget_snapshot,credit_state:'limited_in_snapshot'
+  }}),/credit|snapshot/);
 });
 test('ambiguous real Campaign is allowed as a blocked diagnostic only',()=>{
   const r=parse({...data,campaign_state:'ambiguous',
