@@ -1831,6 +1831,16 @@ class HakiSendEmailDeliveryReadinessModal extends Modal {
             verified.createEl("li",{text:name.replace(/_/g," ")
                 +" — "+(value?"verified":"BLOCKED or changed")});
         }
+        const counts=this.data.audience_status_counts;
+        c.createEl("h3",{text:"Mailing list status snapshot (counts only)"});
+        c.createEl("p",{text:"Total "+counts.total
+            +" · Subscribed "+counts.subscribed
+            +" · Unsubscribed "+counts.unsubscribed
+            +" · Blacklisted "+counts.blacklisted
+            +" · Spam reported "+counts.spam_reported
+            +" · Unconfirmed "+counts.unconfirmed
+            +" · Other "+counts.other});
+        c.createEl("p",{text:"These are status counts, NOT proof of consent or complete suppression. No subscriber addresses were retrieved."});
         c.createEl("h3",{text:"Required evidence not yet verified"});
         const missing=c.createEl("ul");
         for(const [name,value] of Object.entries(this.data.compliance)){
