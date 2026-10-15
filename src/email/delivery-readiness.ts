@@ -20,6 +20,14 @@ const COMPLIANCE=[
 type Check=typeof CHECKS[number];
 type Guard=typeof COMPLIANCE[number];
 
+export interface AudienceStatusCounts {
+  subscribed:number;unsubscribed:number;blacklisted:number;
+  spam_reported:number;unconfirmed:number;other:number;total:number;
+  source:'owner_list_status_snapshot';
+  consent_verified:false;suppression_verified:false;
+}
+const STATUS_KEYS=['subscribed','unsubscribed','blacklisted','spam_reported',
+  'unconfirmed','other'] as const;
 export interface DeliveryReadiness {
   contract_version:'hks_delivery_readiness_v1';
   site_uid:string;
@@ -28,6 +36,7 @@ export interface DeliveryReadiness {
   campaign_uid:string;
   campaign_state:'new'|'ambiguous';
   checks:Record<Check,boolean>;
+  audience_status_counts:AudienceStatusCounts;
   compliance:Record<Guard,'unverified'>;
   ready_to_send:false;
   send_authorized:false;
@@ -78,11 +87,29 @@ export function parseDeliveryReadiness(
      !['new','ambiguous'].includes(String(d.campaign_state))||
      d.ready_to_send!==false||d.send_authorized!==false||
      d.schedule_authorized!==false||d.read_only!==true||
-     !obj(d.checks)||!obj(d.compliance)||
+     !obj(d.checks)||!obj(d.compliance)||!obj(d.audience_status_counts)||
      Object.keys(d.checks).length!==CHECKS.length||
      Object.keys(d.compliance).length!==COMPLIANCE.length) {
     throw Error('Unexpected or unsafe delivery readiness evidence.');
   }
+  const counts=d.audience_status_counts;
+  if(counts.source!=='owner_list_status_snapshot'||
+     counts.consent_verified!==false||counts.suppression_verified!==false||
+     Object.keys(counts).length!==10||!Number.isSafeInteger(counts.total)||
+     (counts.total as number)<0){
+    throw Error('Untrusted audience status evidence.');
+  }
+  let sum=0;
+  for(const key of STATUS_KEYS){
+    const n=counts[key];
+    if(typeof n!=='number'||!Number.isSafeInteger(n)||n<0){
+      throw Error('Invalid aggregate audience count.');
+    }
+    sum+=n;
+    if(!Number.isSafeInteger(sum))throw Error('Audience total exceeds safe integer.');
+  }
+  if(sum!==counts.total)throw Error('Audience count total mismatch.');
+
   for(const key of CHECKS)if(typeof d.checks[key]!=='boolean')
     throw Error('Missing server-side readiness check.');
   for(const key of COMPLIANCE)if(d.compliance[key]!=='unverified')
