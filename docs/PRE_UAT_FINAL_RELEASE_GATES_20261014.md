@@ -112,3 +112,11 @@ explicitly approved by the owner.
 - After POST, user gets a fresh server GET receipt. Only a matching, native NEW unscheduled Acelle Campaign UID is written into local frontmatter. Ambiguous/unauthorized/changed states are never marked delivered or scheduled; there are no automatic retries.
 - The server route and both candidates still remain unmounted and feature-OFF in the installed Sites plugin. This is **development source only**. Actual delivery/schedule commands, consent/unsubscribe, template parity and final owner-tested Obsidian v0.1.9 equivalence are all **blocked** pending complete UAT.
 - Pure TypeScript CI and Obsidian TypeScript compile/build must pass. Candidate backend isolated Laravel/MySQL8 route GET/POST CI must pass before claiming interoperable readback.
+
+
+## 2026-10-15 — Acelle delivery readiness read-only diagnostic
+
+- Obsidian adds a deliberate command **HakiSend: Check Acelle Email Delivery Readiness (read-only)** for a verified Standalone source with the exact native Campaign promotion receipt ID. The UI shows owner/list/sender/native Campaign checks and explicit missing compliance evidence. No sending or scheduling actions exist in this modal.
+- Backend candidate route is feature-OFF and unmounted in installed Sites. Client refuses forged `ready_to_send=true`, any `send_authorized=true` or `schedule_authorized=true`, unexpected compliance value, mismatched owner/Site/Request/Draft/Campaign or unknown contract fields. Consent/unsubscribe/suppression/quota/provider are reported only as `unverified`.
+- Correct real Acelle Campaign ID format is PHP `HasUid` 13 lowercase hex; Site, Private Draft and request are UUID. Delivery preflight now uses that distinction.
+- Node22 CI tests validate strict GET-only transport, no retries, identity binding and no false authorization. This is a new diagnostic contract only and **is not** a production-ready send confirmation.
