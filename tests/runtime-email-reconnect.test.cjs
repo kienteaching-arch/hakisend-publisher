@@ -62,14 +62,16 @@ const obsidian={Plugin,Modal,PluginSettingTab,FuzzySuggestModal:class {},
    if(!state.handler)throw Error('No HTTP mock');
    return state.handler(args);
  }};
+// Mirror the known-passing owner-tested v0.1.9 Obsidian runtime harness:
+// establish the desktop globals BEFORE evaluating the compiled bundle and
+// keep the obsidian require shim while plugin methods are exercised.
+global.window={open(url){state.opened.push(url);return {};}};
 const original=Module._load;
 Module._load=function(name,...args){
   return name==='obsidian'?obsidian:original.call(this,name,...args);
 };
-let Main;
-try {Main=require(path.resolve(__dirname,'../main.js')).default;}
-finally {Module._load=original;}
-global.window={open(url){state.opened.push(url);return {};}};
+const Main=require(path.resolve(__dirname,'../main.js')).default;
+assert.equal(typeof Main,'function','Obsidian development bundle exports a plugin class');
 
 function reset(){
   state.opened.length=0;state.http.length=0;state.notices.length=0;
