@@ -11,6 +11,7 @@ const CHECKS=[
   'audience_bound_and_readable','native_campaign_ownership_verified',
   'native_campaign_unscheduled_new','native_campaign_single_list',
   'sender_identity_verified','uploaded_template_owned',
+  'native_unsubscribe_markup_present',
 ] as const;
 const COMPLIANCE=[
   'unsubscribe','consent','suppression','quota','provider',
