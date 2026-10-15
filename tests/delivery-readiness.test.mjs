@@ -46,6 +46,15 @@ const data={
     live_credit_balance_verified:false,live_rate_window_verified:false,
     quota_verified:false,send_authorized:false,
   },
+  consent_provenance:{
+    source:'acelle_subscriber_type_metadata_v1',
+    double_optin_label:1,single_optin_label:0,imported_label:1,
+    admin_added_label:0,other_or_missing_label:0,
+    ip_metadata_present:1,subscribed_total:2,
+    double_optin_receipt_verified:false,
+    marketing_purpose_consent_verified:false,
+    consent_audit_complete:false,send_authorized:false,
+  },
   compliance:Object.fromEntries(complianceKeys.map(x=>[x,'unverified'])),
   ready_to_send:false,send_authorized:false,schedule_authorized:false,read_only:true,
 };
@@ -78,6 +87,8 @@ test('valid new native Campaign is explicitly NOT sendable',()=>{
   assert.equal(r.blacklist_overlap.suppression_verified,false);
   assert.equal(r.budget_snapshot.credit_state,'no_active_subscription');
   assert.equal(r.budget_snapshot.quota_verified,false);
+  assert.equal(r.consent_provenance.double_optin_label,1);
+  assert.equal(r.consent_provenance.marketing_purpose_consent_verified,false);
 });
 test('rejects forged send permission, schedule or compliance',()=>{
   for(const patch of [
@@ -156,6 +167,30 @@ test('plan-credit snapshot and rate limits are diagnostic only, never real-time 
   assert.throws(()=>parse({...data,budget_snapshot:{
     ...data.budget_snapshot,credit_state:'limited_in_snapshot'
   }}),/credit|snapshot/);
+});
+test('double opt-in type and IP are only hints, never authoritative marketing consent',()=>{
+  const verified=parse(data);
+  assert.equal(verified.compliance.consent,'unverified');
+  assert.equal(verified.consent_provenance.consent_audit_complete,false);
+  for(const patch of [
+    {marketing_purpose_consent_verified:true},
+    {double_optin_receipt_verified:true},
+    {consent_audit_complete:true},{send_authorized:true},
+    {double_optin_label:2},{imported_label:-1},
+    {ip_metadata_present:3},{subscribed_total:3},
+    {source:'consent_registry_verified'},
+    {subscribed_total:NaN},{contact_email:'private@example.test'},
+  ]){
+    assert.throws(()=>parse({...data,consent_provenance:{
+      ...data.consent_provenance,...patch
+    }}),/consent|provenance|Untrusted/i);
+  }
+  const allDouble=parse({...data,consent_provenance:{
+    ...data.consent_provenance,double_optin_label:2,imported_label:0,
+    ip_metadata_present:2,
+  }});
+  assert.equal(allDouble.consent_provenance.marketing_purpose_consent_verified,false);
+  assert.equal(allDouble.send_authorized,false);
 });
 test('ambiguous real Campaign is allowed as a blocked diagnostic only',()=>{
   const r=parse({...data,campaign_state:'ambiguous',
