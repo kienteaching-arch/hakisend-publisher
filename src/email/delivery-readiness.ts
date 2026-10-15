@@ -141,14 +141,14 @@ export function parseDeliveryReadiness(
       throw Error('Invalid blacklist overlap aggregate.');
     }
   }
-  if(overlaps.subscribed_total!==counts.subscribed ||
-     overlaps.owner_blacklist_overlap>counts.subscribed ||
-     overlaps.global_blacklist_overlap>counts.subscribed ||
-     overlaps.either_blacklist_overlap>counts.subscribed ||
-     overlaps.either_blacklist_overlap<
-       Math.max(overlaps.owner_blacklist_overlap,overlaps.global_blacklist_overlap)||
-     overlaps.either_blacklist_overlap+overlaps.without_either_blacklist_overlap!==
-       counts.subscribed) {
+  // Numeric validation above precedes all casts (Record<string,unknown>).
+  const total=counts.subscribed as number;
+  const owner=overlaps.owner_blacklist_overlap as number;
+  const global=overlaps.global_blacklist_overlap as number;
+  const either=overlaps.either_blacklist_overlap as number;
+  const clear=overlaps.without_either_blacklist_overlap as number;
+  if(overlaps.subscribed_total!==total || owner>total || global>total ||
+     either>total || either<Math.max(owner,global) || either+clear!==total) {
     throw Error('Blacklist overlap contradicts subscriber status totals.');
   }
 
