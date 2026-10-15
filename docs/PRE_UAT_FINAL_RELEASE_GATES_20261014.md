@@ -136,3 +136,10 @@ explicitly approved by the owner.
 - The same modal shows the **Acelle cold subscription credit snapshot** and the **configured plan send-rate cap**. These are NOT the live hot credit balance or the remaining sliding-window rate. No state is consumed, no send capacity reserved, and no delivery is authorized.
 - Client contract rejects mismatched aggregate counts, extra private fields, fake suppression clearances, unsafe credit values, fake unlimited grants, unauthorized rate formats or any 'send_authorized' / 'quota_verified' claims. A single explicit GET only; backend feature flags all default OFF, routes unmounted.
 - Last remaining milestones before Email UAT: individual consent provenance, runtime suppression and quota reservation, per-subscriber unsubscribe validation, Acelle/provider receipts, safe scheduling/cancel and explicit user confirmation. Calendar final follows Email, and Phase 3A manual Markdown sync remains blocked.
+
+
+## 2026-10-15 — Acelle signup provenance labels (not verified consent)
+
+- The backend now has a separate default-OFF source-label snapshot for a tenant-authorized mailing list. It counts subscribed subscribers labeled double opt-in, single opt-in, imported, admin-added, or unknown; only counts IP metadata presence, never IP values, raw emails or subscriber identities.
+- Obsidian's manual-only readiness dialog displays these counts. Its strict contract rejects negative/inconsistent totals, forged double-opt-in receipts, marketing-purpose consent proof, or any new PII fields. `subscribed`, `double` and nonempty `ip` never authorize email, and `compliance.consent` remains `unverified`.
+- Next release gate must be **real immutable purpose-specific consent evidence** captured by a trusted server-side subscription flow, verified at delivery handoff and revocable at any time. Historical imported or manually added contacts cannot be silently marked as opted in. No send, schedule or write commands have been unlocked by this diagnostic.
