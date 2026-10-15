@@ -12,8 +12,16 @@ import type {CalendarSource, CalendarKind, CalendarStatus} from './calendar-proj
 const VALID_KINDS = new Set<CalendarKind>([
   'post','post_linked_email','standalone_email',
 ]);
-const VALID_STATUSES = new Set<CalendarStatus>([
-  'draft','planned','scheduled','published','sent','failed','cancelled','ambiguous',
+const STATUSES_BY_KIND: Record<CalendarKind,ReadonlySet<CalendarStatus>> = {
+  // This v1 server only proves authoring status, never public visibility.
+  post: new Set<CalendarStatus>(['draft','scheduled','published','ambiguous']),
+  // No native scheduling or provider receipts are verified yet.
+  post_linked_email: new Set<CalendarStatus>(['draft','ambiguous']),
+  standalone_email: new Set<CalendarStatus>(['draft','ambiguous','cancelled']),
+};
+const PAYLOAD_KEYS = new Set(['success','data']);
+const SNAPSHOT_KEYS = new Set([
+  'contract_version','site_uid','as_of_utc_ms','truncated','read_only','events',
 ]);
 const ALLOWED_FIELDS = new Set([
   'uid','kind','siteUid','title','status','serverConfirmed',
@@ -46,7 +54,13 @@ export function validateHakiSendCalendar(
   if (!object(payload) || payload.success !== true || !object(payload.data)) {
     throw Error('Calendar API did not return a valid success envelope.');
   }
+  if (Object.keys(payload).some(key => !PAYLOAD_KEYS.has(key))) {
+    throw Error('Unexpected Calendar response envelope field.');
+  }
   const d = payload.data;
+  if (Object.keys(d).some(key => !SNAPSHOT_KEYS.has(key))) {
+    throw Error('Unexpected Calendar snapshot field.');
+  }
   if (d.contract_version !== 'hks_calendar_v1') {
     throw Error('Calendar API contract version differs from the client.');
   }
@@ -64,7 +78,7 @@ export function validateHakiSendCalendar(
     if (typeof raw.uid !== 'string' || !UID.test(raw.uid) ||
         raw.siteUid !== expectedSiteUid ||
         !VALID_KINDS.has(raw.kind as CalendarKind) ||
-        !VALID_STATUSES.has(raw.status as CalendarStatus) ||
+        !STATUSES_BY_KIND[raw.kind as CalendarKind].has(raw.status as CalendarStatus) ||
         raw.serverConfirmed !== true || raw.sendAuthorized !== false ||
         !time(raw.scheduledAtUtcMs)) {
       throw Error('Calendar event identity, time or authorization is invalid.');
@@ -75,8 +89,13 @@ export function validateHakiSendCalendar(
     }
     if (raw.kind === 'post') {
       if (raw.publicVisibility !== 'not_attested' ||
-          !time(raw.postPublishAtUtcMs) || !time(raw.postUnpublishAtUtcMs)) {
-        throw Error('Post authoring date must not claim public visibility.');
+          'linkedPostUid' in raw || 'scheduleAuthorization' in raw ||
+          !time(raw.postPublishAtUtcMs) || !time(raw.postUnpublishAtUtcMs) ||
+          (raw.status === 'scheduled'
+            ? raw.scheduledAtUtcMs === null ||
+              raw.scheduledAtUtcMs !== raw.postPublishAtUtcMs
+            : raw.scheduledAtUtcMs !== null)) {
+        throw Error('Post authoring date must not claim public visibility or an unverified clock.');
       }
     }
     if (raw.kind === 'post_linked_email') {
@@ -84,13 +103,18 @@ export function validateHakiSendCalendar(
           !UID.test(raw.linkedPostUid)) {
         throw Error('Missing authorized Post linkage.');
       }
-      if ((raw.status === 'draft' || raw.status === 'ambiguous') &&
-          raw.scheduledAtUtcMs !== null) {
+      if (raw.scheduleAuthorization !== 'not_attested' ||
+          raw.scheduledAtUtcMs !== null ||
+          'postPublishAtUtcMs' in raw || 'postUnpublishAtUtcMs' in raw ||
+          'publicVisibility' in raw) {
         throw Error('Post-linked Email draft cannot have its own schedule.');
       }
     }
-    if (raw.kind === 'standalone_email' && raw.status === 'draft' &&
-        raw.scheduledAtUtcMs !== null) {
+    if (raw.kind === 'standalone_email' &&
+        (raw.scheduledAtUtcMs !== null ||
+         'linkedPostUid' in raw || 'scheduleAuthorization' in raw ||
+         'postPublishAtUtcMs' in raw || 'postUnpublishAtUtcMs' in raw ||
+         'publicVisibility' in raw)) {
       throw Error('Standalone Draft cannot masquerade as scheduled mail.');
     }
     return {

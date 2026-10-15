@@ -90,6 +90,47 @@ test('reject duplicate events through shared Calendar projection',()=>{
   const x=envelope();x.data.events.push({...post});
   assert.throws(()=>check(x),/Duplicate calendar event/);
 });
+test('current server Calendar never attests outgoing Email sent or scheduled',()=>{
+  for (const kind of ['standalone_email','post_linked_email']) {
+    for(const status of ['scheduled','sent','published','planned','failed']) {
+      const x=envelope();
+      const index=kind==='standalone_email'?1:2;
+      x.data.events[index].status=status;
+      assert.throws(()=>check(x),/identity, time or authorization/);
+    }
+  }
+  const x=envelope();x.data.events[1].status='cancelled';
+  assert.equal(check(x).calendar.unscheduled.length,1);
+});
+test('authoring Post clock and public state cannot forge arbitrary publication',()=>{
+  const x=envelope();x.data.events[0].status='scheduled';
+  x.data.events[0].scheduledAtUtcMs+=60000;
+  assert.throws(()=>check(x),/unverified clock/);
+  const y=envelope();y.data.events[0].status='published';
+  assert.throws(()=>check(y),/unverified clock/);
+  const z=envelope();z.data.events[0].status='sent';
+  assert.throws(()=>check(z),/identity, time or authorization/);
+});
+test('unexpected top-level or snapshot data is refused, including PII',()=>{
+  const x=envelope();x.data.owner_email='private@example.test';
+  assert.throws(()=>check(x),/snapshot field/);
+  const y=envelope();y.recipients=['private@example.test'];
+  assert.throws(()=>check(y),/envelope field/);
+});
+test('cross-kind extra fields cannot smuggle an invented schedule or authority',()=>{
+  const cases=[
+    [0,{scheduleAuthorization:'verified'}],
+    [1,{linkedPostUid:postUid}],
+    [1,{publicVisibility:'verified_live'}],
+    [2,{postPublishAtUtcMs:Date.now()}],
+    [2,{scheduleAuthorization:'ready'}],
+    [2,{publicVisibility:'verified_live'}],
+  ];
+  for(const [index,extra] of cases){
+    const x=envelope();Object.assign(x.data.events[index],extra);
+    assert.throws(()=>check(x),/schedule|visibility|clock|masquerade/i);
+  }
+});
 test('bounded HTTPS request includes OAuth only in Authorization header',()=>{
   const token='hks_pub_synthetic_for_tests_only';
   const q=buildCalendarReadRequest('https://hakisend.example/',site,token,25);
