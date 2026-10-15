@@ -52,6 +52,20 @@ export interface BudgetSnapshot {
   quota_verified:false;
   send_authorized:false;
 }
+export interface ConsentProvenance {
+  source:'acelle_subscriber_type_metadata_v1';
+  double_optin_label:number;
+  single_optin_label:number;
+  imported_label:number;
+  admin_added_label:number;
+  other_or_missing_label:number;
+  ip_metadata_present:number;
+  subscribed_total:number;
+  double_optin_receipt_verified:false;
+  marketing_purpose_consent_verified:false;
+  consent_audit_complete:false;
+  send_authorized:false;
+}
 export interface DeliveryReadiness {
   contract_version:'hks_delivery_readiness_v1';
   site_uid:string;
@@ -63,6 +77,7 @@ export interface DeliveryReadiness {
   audience_status_counts:AudienceStatusCounts;
   blacklist_overlap:BlacklistOverlap;
   budget_snapshot:BudgetSnapshot;
+  consent_provenance:ConsentProvenance;
   compliance:Record<Guard,'unverified'>;
   ready_to_send:false;
   send_authorized:false;
@@ -116,6 +131,7 @@ export function parseDeliveryReadiness(
      !obj(d.checks)||!obj(d.compliance)||!obj(d.audience_status_counts)||
      !obj(d.blacklist_overlap)||
      !obj(d.budget_snapshot)||
+     !obj(d.consent_provenance)||
      Object.keys(d.checks).length!==CHECKS.length||
      Object.keys(d.compliance).length!==COMPLIANCE.length) {
     throw Error('Unexpected or unsafe delivery readiness evidence.');
@@ -208,6 +224,39 @@ export function parseDeliveryReadiness(
             budget.rate_window_amount!==null||budget.rate_window_unit!==null) {
     throw Error('Unconfigured rate limiter must have null configuration.');
   }
+
+  const provenance=d.consent_provenance;
+  const provenanceFields=[
+    'double_optin_label','single_optin_label','imported_label',
+    'admin_added_label','other_or_missing_label',
+  ] as const;
+  if(provenance.source!=='acelle_subscriber_type_metadata_v1'||
+     provenance.double_optin_receipt_verified!==false||
+     provenance.marketing_purpose_consent_verified!==false||
+     provenance.consent_audit_complete!==false||
+     provenance.send_authorized!==false||
+     Object.keys(provenance).length!==12||
+     typeof provenance.subscribed_total!=='number'||
+     !Number.isSafeInteger(provenance.subscribed_total)||
+     provenance.subscribed_total<0||
+     typeof provenance.ip_metadata_present!=='number'||
+     !Number.isSafeInteger(provenance.ip_metadata_present)||
+     provenance.ip_metadata_present<0||
+     provenance.ip_metadata_present>provenance.subscribed_total||
+     provenance.subscribed_total!==counts.subscribed) {
+    throw Error('Untrusted consent provenance labels.');
+  }
+  let labeledTotal=0;
+  for(const key of provenanceFields) {
+    const n=provenance[key];
+    if(typeof n!=='number'||!Number.isSafeInteger(n)||n<0)
+      throw Error('Invalid consent provenance count.');
+    labeledTotal+=n;
+    if(!Number.isSafeInteger(labeledTotal))
+      throw Error('Consent provenance count overflow.');
+  }
+  if(labeledTotal!==provenance.subscribed_total)
+    throw Error('Consent provenance totals do not match subscriber status.');
 
   for(const key of CHECKS)if(typeof d.checks[key]!=='boolean')
     throw Error('Missing server-side readiness check.');
