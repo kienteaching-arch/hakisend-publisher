@@ -28,6 +28,17 @@ export interface AudienceStatusCounts {
 }
 const STATUS_KEYS=['subscribed','unsubscribed','blacklisted','spam_reported',
   'unconfirmed','other'] as const;
+export interface BlacklistOverlap {
+  source:'acelle_owner_list_blacklist_overlap_v1';
+  subscribed_total:number;
+  owner_blacklist_overlap:number;
+  global_blacklist_overlap:number;
+  either_blacklist_overlap:number;
+  without_either_blacklist_overlap:number;
+  global_blacklist_policy:'unverified';
+  suppression_verified:false;
+  recipient_send_authorized:false;
+}
 export interface DeliveryReadiness {
   contract_version:'hks_delivery_readiness_v1';
   site_uid:string;
@@ -37,6 +48,7 @@ export interface DeliveryReadiness {
   campaign_state:'new'|'ambiguous';
   checks:Record<Check,boolean>;
   audience_status_counts:AudienceStatusCounts;
+  blacklist_overlap:BlacklistOverlap;
   compliance:Record<Guard,'unverified'>;
   ready_to_send:false;
   send_authorized:false;
@@ -88,6 +100,7 @@ export function parseDeliveryReadiness(
      d.ready_to_send!==false||d.send_authorized!==false||
      d.schedule_authorized!==false||d.read_only!==true||
      !obj(d.checks)||!obj(d.compliance)||!obj(d.audience_status_counts)||
+     !obj(d.blacklist_overlap)||
      Object.keys(d.checks).length!==CHECKS.length||
      Object.keys(d.compliance).length!==COMPLIANCE.length) {
     throw Error('Unexpected or unsafe delivery readiness evidence.');
@@ -109,6 +122,36 @@ export function parseDeliveryReadiness(
     if(!Number.isSafeInteger(sum))throw Error('Audience total exceeds safe integer.');
   }
   if(sum!==counts.total)throw Error('Audience count total mismatch.');
+
+  const overlaps=d.blacklist_overlap;
+  if(overlaps.source!=='acelle_owner_list_blacklist_overlap_v1'||
+     overlaps.global_blacklist_policy!=='unverified'||
+     overlaps.suppression_verified!==false||
+     overlaps.recipient_send_authorized!==false||
+     Object.keys(overlaps).length!==9) {
+    throw Error('Unsafe blacklist overlap attestation.');
+  }
+  const overlapFields=[
+    'subscribed_total','owner_blacklist_overlap','global_blacklist_overlap',
+    'either_blacklist_overlap','without_either_blacklist_overlap',
+  ] as const;
+  for(const key of overlapFields) {
+    const n=overlaps[key];
+    if(typeof n!=='number'||!Number.isSafeInteger(n)||n<0){
+      throw Error('Invalid blacklist overlap aggregate.');
+    }
+  }
+  if(overlaps.subscribed_total!==counts.subscribed ||
+     overlaps.owner_blacklist_overlap>counts.subscribed ||
+     overlaps.global_blacklist_overlap>counts.subscribed ||
+     overlaps.either_blacklist_overlap>counts.subscribed ||
+     overlaps.either_blacklist_overlap<
+       Math.max(overlaps.owner_blacklist_overlap,overlaps.global_blacklist_overlap)||
+     overlaps.either_blacklist_overlap+overlaps.without_either_blacklist_overlap!==
+       counts.subscribed) {
+    throw Error('Blacklist overlap contradicts subscriber status totals.');
+  }
+
 
   for(const key of CHECKS)if(typeof d.checks[key]!=='boolean')
     throw Error('Missing server-side readiness check.');
