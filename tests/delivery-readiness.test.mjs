@@ -55,6 +55,12 @@ const data={
     marketing_purpose_consent_verified:false,
     consent_audit_complete:false,send_authorized:false,
   },
+  consent_token_receipts:{
+    source:'token_redemption_candidate_v1',state:'disabled',
+    current_subscribed_redeemed_tokens:null,current_subscribed_withdrawn:null,
+    mailbox_delivery_verified:false,marketing_consent_verified:false,
+    unsubscribe_hooks_verified:false,send_authorized:false,
+  },
   compliance:Object.fromEntries(complianceKeys.map(x=>[x,'unverified'])),
   ready_to_send:false,send_authorized:false,schedule_authorized:false,read_only:true,
 };
@@ -89,6 +95,8 @@ test('valid new native Campaign is explicitly NOT sendable',()=>{
   assert.equal(r.budget_snapshot.quota_verified,false);
   assert.equal(r.consent_provenance.double_optin_label,1);
   assert.equal(r.consent_provenance.marketing_purpose_consent_verified,false);
+  assert.equal(r.consent_token_receipts.state,'disabled');
+  assert.equal(r.consent_token_receipts.current_subscribed_redeemed_tokens,null);
 });
 test('rejects forged send permission, schedule or compliance',()=>{
   for(const patch of [
@@ -191,6 +199,41 @@ test('double opt-in type and IP are only hints, never authoritative marketing co
   }});
   assert.equal(allDouble.consent_provenance.marketing_purpose_consent_verified,false);
   assert.equal(allDouble.send_authorized,false);
+});
+test('disabled consent ledger is UNKNOWN, never silently zero or opted in',()=>{
+  for(const bad of [
+    {current_subscribed_redeemed_tokens:0},
+    {current_subscribed_withdrawn:0},
+    {mailbox_delivery_verified:true},
+    {marketing_consent_verified:true},
+    {unsubscribe_hooks_verified:true},
+    {send_authorized:true},
+    {private_email:'user@example.test'},
+  ]){
+    assert.throws(()=>parse({...data,consent_token_receipts:{
+      ...data.consent_token_receipts,...bad,
+    }}),/consent|receipt|ledger|unknown/i);
+  }
+});
+test('candidate token redemption history remains non-sendable',()=>{
+  const candidate={...data.consent_token_receipts,
+    state:'candidate_only',current_subscribed_redeemed_tokens:1,
+    current_subscribed_withdrawn:1,
+  };
+  const result=parse({...data,consent_token_receipts:candidate});
+  assert.equal(result.consent_token_receipts.marketing_consent_verified,false);
+  assert.equal(result.send_authorized,false);
+  for(const bad of [
+    {current_subscribed_redeemed_tokens:3},
+    {current_subscribed_withdrawn:-1},
+    {current_subscribed_redeemed_tokens:1.5},
+    {current_subscribed_redeemed_tokens:null},
+    {marketing_consent_verified:true},
+  ]){
+    assert.throws(()=>parse({...data,consent_token_receipts:{
+      ...candidate,...bad,
+    }}),/consent|receipt|ledger|invalid/i);
+  }
 });
 test('ambiguous real Campaign is allowed as a blocked diagnostic only',()=>{
   const r=parse({...data,campaign_state:'ambiguous',
