@@ -1870,6 +1870,13 @@ class HakiSendEmailDeliveryReadinessModal extends Modal {
         c.createEl("p",{text:"IP metadata present: "+provenance.ip_metadata_present
             +" / "+provenance.subscribed_total
             +". Labels and IP metadata do NOT prove marketing consent. Confirmation receipts and consent purpose remain UNVERIFIED."});
+        const receipts=this.data.consent_token_receipts;
+        c.createEl("h3",{text:"Subscriber confirmation evidence ledger"});
+        c.createEl("p",{text:receipts.state==="disabled"
+            ? "Evidence ledger: DISABLED / not installed. Receipt counts are UNKNOWN."
+            : "Candidate token redemptions: "+receipts.current_subscribed_redeemed_tokens
+                +" · Withdrawn: "+receipts.current_subscribed_withdrawn});
+        c.createEl("p",{text:"Mailbox ownership, genuine recipient confirmation delivery and marketing consent remain UNVERIFIED. No sender can approve consent from this screen."});
         c.createEl("h3",{text:"Required evidence not yet verified"});
         const missing=c.createEl("ul");
         for(const [name,value] of Object.entries(this.data.compliance)){
