@@ -27,6 +27,17 @@ const data={
     spam_reported:1,unconfirmed:1,other:1,total:7,
     consent_verified:false,suppression_verified:false,
   },
+  blacklist_overlap:{
+    source:'acelle_owner_list_blacklist_overlap_v1',
+    subscribed_total:2,
+    owner_blacklist_overlap:1,
+    global_blacklist_overlap:1,
+    either_blacklist_overlap:1,
+    without_either_blacklist_overlap:1,
+    global_blacklist_policy:'unverified',
+    suppression_verified:false,
+    recipient_send_authorized:false,
+  },
   compliance:Object.fromEntries(complianceKeys.map(x=>[x,'unverified'])),
   ready_to_send:false,send_authorized:false,schedule_authorized:false,read_only:true,
 };
@@ -55,6 +66,8 @@ test('valid new native Campaign is explicitly NOT sendable',()=>{
   assert.equal(r.compliance.unsubscribe,'unverified');
   assert.equal(r.audience_status_counts.subscribed,2);
   assert.equal(r.audience_status_counts.consent_verified,false);
+  assert.equal(r.blacklist_overlap.either_blacklist_overlap,1);
+  assert.equal(r.blacklist_overlap.suppression_verified,false);
 });
 test('rejects forged send permission, schedule or compliance',()=>{
   for(const patch of [
@@ -85,6 +98,27 @@ test('aggregates do not prove opt-in or suppression and fail closed on spoofed/i
       audience_status_counts:{...data.audience_status_counts,...patch}
     }),/audience|aggregate|total|Untrusted/i);
   }
+});
+test('strict local/global blacklist overlap contract, no false suppression permission',()=>{
+  for(const patch of [
+    {subscribed_total:3},{owner_blacklist_overlap:3},
+    {global_blacklist_overlap:-1},{either_blacklist_overlap:0},
+    {without_either_blacklist_overlap:2},{source:'fake'},
+    {global_blacklist_policy:'enabled'},{suppression_verified:true},
+    {recipient_send_authorized:true},{email:'private@example.test'},
+    {without_either_blacklist_overlap:NaN},
+  ]){
+    assert.throws(()=>parse({...data,blacklist_overlap:{
+      ...data.blacklist_overlap,...patch
+    }}),/overlap|Blacklist|blacklist/i);
+  }
+  const allowed=parse({...data,blacklist_overlap:{
+    ...data.blacklist_overlap,owner_blacklist_overlap:1,
+    global_blacklist_overlap:2,either_blacklist_overlap:2,
+    without_either_blacklist_overlap:0,
+  }});
+  assert.equal(allowed.compliance.suppression,'unverified');
+  assert.equal(allowed.send_authorized,false);
 });
 test('ambiguous real Campaign is allowed as a blocked diagnostic only',()=>{
   const r=parse({...data,campaign_state:'ambiguous',
