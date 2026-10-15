@@ -14,7 +14,7 @@ import { Modal,
 import {requestPrivateDraft} from "./email/hakisend-draft-api";
 import {parsePrivateDraftList, parsePrivateDraftDetail, type PrivateDraftListRow, type PrivateDraftReadOnlyDetail} from "./email/private-draft-list";
 import {
-    parseStandalonePlan, isAudience, isRevisionConflict, canAdoptRevision,
+    parseStandalonePlan, extractStandaloneEmailBody, isAudience, isRevisionConflict, canAdoptRevision,
     decorateLocalPlan, type StandalonePlan, type Audience,
 } from "./email/private-draft-contract";
 import {explicitlySavePrivateDraft} from "./email/explicit-private-draft-save";
@@ -2584,8 +2584,7 @@ export default class HakiSendPublisherPlugin
                             mutateRemote:m=>requester(m.suffix,m.method,m.payload),
                             persistVerifiedReceipt:async verified=>{
                                 const currentRaw=await this.app.vault.read(file);
-                                const match=/^## Email body\\s*$/im.exec(currentRaw);
-                                if(!match || currentRaw.slice(match.index+match[0].length).trim()!==plan.body) {
+                                if(extractStandaloneEmailBody(currentRaw)!==plan.body) {
                                     throw Error("Local note body changed; server must be reviewed manually.");
                                 }
                                 await this.app.fileManager.processFrontMatter(file,fm=>{
@@ -2605,8 +2604,7 @@ export default class HakiSendPublisherPlugin
                                     fm.hakisend_remote_email_status="private_draft";
                                 });
                                 await this.app.vault.process(file,raw=>{
-                                    const heading=/^## Email body\\s*$/im.exec(raw);
-                                    if(!heading || raw.slice(heading.index+heading[0].length).trim()!==plan.body) {
+                                    if(extractStandaloneEmailBody(raw)!==plan.body) {
                                         throw Error("Local Markdown changed while updating verified callout.");
                                     }
                                     return decorateLocalPlan(raw,verified.revision);
@@ -2633,8 +2631,7 @@ export default class HakiSendPublisherPlugin
                                 throw Error("Remote revision changed again.");
                             }
                             const currentRaw=await this.app.vault.read(file);
-                            const heading=/^## Email body\\s*$/im.exec(currentRaw);
-                            if(!heading || currentRaw.slice(heading.index+heading[0].length).trim()!==plan.body) {
+                            if(extractStandaloneEmailBody(currentRaw)!==plan.body) {
                                 throw Error("Local content changed during conflict review.");
                             }
                             await this.app.fileManager.processFrontMatter(file,fm=>{
@@ -2683,8 +2680,7 @@ export default class HakiSendPublisherPlugin
         file:TFile,plan:StandalonePlan,requestUid:string,receipt:PromotionReceipt
     ):Promise<void> {
         const raw=await this.app.vault.read(file);
-        const match=/^## Email body\s*$/im.exec(raw);
-        if(!match||raw.slice(match.index+match[0].length).trim()!==plan.body){
+        if(extractStandaloneEmailBody(raw)!==plan.body){
             throw Error("Local Markdown changed; server Campaign may exist. No overwrite.");
         }
         await this.app.fileManager.processFrontMatter(file,fm=>{
