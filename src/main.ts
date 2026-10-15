@@ -1849,6 +1849,17 @@ class HakiSendEmailDeliveryReadinessModal extends Modal {
             +" · Either blacklist: "+overlap.either_blacklist_overlap
             +" · Neither blacklist: "+overlap.without_either_blacklist_overlap});
         c.createEl("p",{text:"Global blacklist policy is unverified. These are read-only matches, not recipient-time suppression or permission to send."});
+        const budget=this.data.budget_snapshot;
+        c.createEl("h3",{text:"Email credit and rate plan snapshot"});
+        const creditLabel=budget.credit_state==="limited_in_snapshot"
+            ? String(budget.credits_remaining_snapshot)+" credits in last DB snapshot"
+            : budget.credit_state.replace(/_/g," ");
+        c.createEl("p",{text:"Credit: "+creditLabel});
+        c.createEl("p",{text:budget.rate_limit_configured
+            ? "Plan rate cap: "+budget.rate_limit_per_window
+                +" / "+budget.rate_window_amount+" "+budget.rate_window_unit
+            : "Plan rate cap: not configured or no active plan"});
+        c.createEl("p",{text:"Live credit balance, rate-window consumption and send quota are UNVERIFIED. A snapshot does not reserve any send capacity."});
         c.createEl("h3",{text:"Required evidence not yet verified"});
         const missing=c.createEl("ul");
         for(const [name,value] of Object.entries(this.data.compliance)){
