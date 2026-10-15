@@ -11,6 +11,7 @@ const checkKeys=[
   'audience_bound_and_readable','native_campaign_ownership_verified',
   'native_campaign_unscheduled_new','native_campaign_single_list',
   'sender_identity_verified','uploaded_template_owned',
+  'native_unsubscribe_markup_present',
 ];
 const complianceKeys=[
   'unsubscribe','consent','suppression','quota','provider',
@@ -44,6 +45,8 @@ test('valid new native Campaign is explicitly NOT sendable',()=>{
   assert.equal(r.send_authorized,false);
   assert.equal(r.schedule_authorized,false);
   assert.equal(r.compliance.consent,'unverified');
+  assert.equal(r.checks.native_unsubscribe_markup_present,true);
+  assert.equal(r.compliance.unsubscribe,'unverified');
 });
 test('rejects forged send permission, schedule or compliance',()=>{
   for(const patch of [
@@ -57,6 +60,12 @@ test('rejects forged send permission, schedule or compliance',()=>{
     {request_uid:'55555555-5555-4555-8555-555555555555'},
     {site_uid:'66666666-6666-4666-8666-666666666666'},
   ]) assert.throws(()=>parse({...data,...patch}),/readiness|server-side|compliance/i);
+});
+test('missing canonical unsubscribe markup is a failed structural check, never send permission',()=>{
+  const r=parse({...data,checks:{...data.checks,native_unsubscribe_markup_present:false}});
+  assert.equal(r.checks.native_unsubscribe_markup_present,false);
+  assert.equal(r.compliance.unsubscribe,'unverified');
+  assert.equal(r.send_authorized,false);
 });
 test('ambiguous real Campaign is allowed as a blocked diagnostic only',()=>{
   const r=parse({...data,campaign_state:'ambiguous',
