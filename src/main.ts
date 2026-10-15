@@ -25,6 +25,7 @@ import {
     normalizeLocalEmailPlan, serializeLocalEmailPlan, localEmailPlanPaths,
     localEmailSourceContext, type LocalEmailPlannerInput
 } from "./email/local-email-planner";
+import {verifyConnectScopes, verifyEmailReconnectSitesProbe} from "./email/email-connect-scope";
 import {acceptCalendarPage, buildCalendarPageRequest, type CalendarPageSession} from "./calendar/paged-calendar-contract";
 
 /**
@@ -102,6 +103,7 @@ interface PendingConnection {
     verifier: string;
     apiBaseUrl: string;
     createdAt: number;
+    emailAccessRequested?: boolean;
 }
 
 interface ExchangeResponse {
@@ -2329,6 +2331,18 @@ export default class HakiSendPublisherPlugin
         });
 
         this.addCommand({
+            id: "reconnect-email-draft-access",
+            name: "HakiSend: Reconnect with Email Draft Access (NOT send)",
+            callback: async () => {
+                if (!this.hasSecureConnection()) {
+                    new Notice("Connect a secure HakiSend Publishing account first.");
+                    return;
+                }
+                await this.startBrowserConnect(true);
+            },
+        });
+
+        this.addCommand({
             id: "new-post",
             name: "HakiSend: New Post",
             callback: async () => {
@@ -2873,18 +2887,15 @@ export default class HakiSendPublisherPlugin
             ?.trim();
     }
 
-    async startBrowserConnect(): Promise<void> {
+    async startBrowserConnect(requestEmailAccess = false): Promise<void> {
         try {
             const apiBaseUrl =
                 normalizeBaseUrl(
                     this.settings.apiBaseUrl
                 );
 
-            this.settings.apiBaseUrl =
-                apiBaseUrl;
-
-            await this.saveSettings();
-
+            // Reconnect must not change saved settings or previous credentials
+            // until the new OAuth exchange AND owner-scoped Site GET are verified.
             const state =
                 randomBase64Url(32);
 
@@ -2902,6 +2913,7 @@ export default class HakiSendPublisherPlugin
                     verifier,
                     apiBaseUrl,
                     createdAt: Date.now(),
+                    emailAccessRequested: requestEmailAccess === true,
                 };
 
             this.app.secretStorage.setSecret(
@@ -2928,6 +2940,9 @@ export default class HakiSendPublisherPlugin
                 "code_challenge_method",
                 "S256"
             );
+            if (requestEmailAccess === true) {
+                url.searchParams.set("email_access_requested", "read_compose");
+            }
 
             const opened = window.open(
                 url.toString(),
@@ -3099,30 +3114,62 @@ export default class HakiSendPublisherPlugin
                 );
             }
 
-            this.app.secretStorage.setSecret(
-                ACCESS_TOKEN_SECRET,
-                token
+            // Compare ONLY exact scopes from the trusted server response.
+            // Any missing or unexpectedly privileged scope preserves the
+            // previous bearer and Site configuration.
+            const emailReconnect = pending.emailAccessRequested === true;
+            const evidence = verifyConnectScopes(
+                payload.data?.scopes,emailReconnect
             );
+            if (!evidence.ok) {
+                this.clearPendingConnection();
+                throw Error(evidence.reason);
+            }
+            if (emailReconnect) {
+                const probe = await requestUrl({
+                    url: pending.apiBaseUrl + "/api/v1/hakisend/sites",
+                    method: "GET",
+                    headers: {
+                        "Accept": "application/json",
+                        "Authorization": `Bearer ${token}`,
+                    },
+                    throw: false,
+                });
+                if (!verifyEmailReconnectSitesProbe(probe.status,probe.json)) {
+                    this.clearPendingConnection();
+                    throw Error("New Email-capable token could not read HakiSend Sites. Previous connection preserved.");
+                }
+            }
 
-            /**
-             * Browser-connect is now authoritative.
-             * Remove the old plain bearer from data.json.
-             */
-            this.settings.bearerToken =
-                "";
-
-            this.settings.apiBaseUrl =
-                pending.apiBaseUrl;
-
-            await this.saveSettings();
-
+            const previousToken = this.app.secretStorage.getSecret(
+                ACCESS_TOKEN_SECRET
+            );
+            const previousSettings = JSON.parse(
+                JSON.stringify(this.settings)
+            ) as HakiSendPublisherSettings;
+            try {
+                this.app.secretStorage.setSecret(ACCESS_TOKEN_SECRET,token);
+                this.settings.bearerToken = "";
+                this.settings.apiBaseUrl = pending.apiBaseUrl;
+                await this.saveSettings();
+                await this.discoverSites();
+            } catch {
+                // Discovery/persistence failure cannot strand the owner
+                // without the previously usable OAuth credential.
+                this.app.secretStorage.setSecret(
+                    ACCESS_TOKEN_SECRET,previousToken ?? ""
+                );
+                this.settings=previousSettings;
+                try {await this.saveSettings();} catch {
+                    // Preserve the old secret even if settings I/O failed.
+                }
+                this.clearPendingConnection();
+                throw Error("New HakiSend connection could not be activated; previous token restored.");
+            }
             this.clearPendingConnection();
-
-            await this.discoverSites();
-
-            new Notice(
-                "HakiSend connected successfully."
-            );
+            new Notice(emailReconnect
+                ? "HakiSend Email Draft Access connected. Sending is NOT enabled."
+                : "HakiSend connected successfully.");
 
             this.settingTab?.display();
         } catch (error) {
