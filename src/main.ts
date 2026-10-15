@@ -6037,6 +6037,17 @@ class HakiSendPublisherSettingTab
                     );
             });
 
+        if (secure) {
+            new Setting(containerEl)
+                .setName("Email Draft Access")
+                .setDesc("Request only email:read and email:compose in addition to existing publishing scopes. A declined or failed reconnection keeps your current token. This never grants email:send or email:schedule.")
+                .addButton(button=>button
+                    .setButtonText("Reconnect with Email Draft Access")
+                    .onClick(async()=>{
+                        await this.plugin.startBrowserConnect(true);
+                    }));
+        }
+
         if (secure || legacy) {
             new Setting(containerEl)
                 .setName(
