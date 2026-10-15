@@ -19,6 +19,7 @@ import {
 } from "./email/private-draft-contract";
 import {explicitlySavePrivateDraft} from "./email/explicit-private-draft-save";
 import {explicitlyPromotePrivateDraft, explicitlyRecoverPrivatePromotion, requestPromotion, type PromotionSender, type PromotionReceipt} from "./email/private-draft-promotion";
+import {explicitlyReadDeliveryReadiness, type DeliveryReadiness} from "./email/delivery-readiness";
 import {buildCalendarReadRequest, validateHakiSendCalendar, type ValidatedCalendarSnapshot} from "./calendar/server-calendar-contract";
 
 /**
@@ -1814,6 +1815,33 @@ class HakiSendManualPromotionModal extends Modal {
     onClose():void{this.contentEl.empty();}
 }
 
+
+/** Server facts only. Nothing in this modal can send or schedule email. */
+class HakiSendEmailDeliveryReadinessModal extends Modal {
+    constructor(app:App,private readonly data:DeliveryReadiness){super(app);}
+    onOpen():void {
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"Email Delivery Readiness · READ ONLY"});
+        c.createEl("p",{text:"Acelle Campaign: "+this.data.campaign_uid
+            +" · Native state: "+this.data.campaign_state});
+        c.createEl("p",{text:"Sending and scheduling remain DISABLED. These checks do not grant permission to send."});
+        c.createEl("h3",{text:"Verified directly against HakiSend / Acelle"});
+        const verified=c.createEl("ul");
+        for(const [name,value] of Object.entries(this.data.checks)){
+            verified.createEl("li",{text:name.replace(/_/g," ")
+                +" — "+(value?"verified":"BLOCKED or changed")});
+        }
+        c.createEl("h3",{text:"Required evidence not yet verified"});
+        const missing=c.createEl("ul");
+        for(const [name,value] of Object.entries(this.data.compliance)){
+            missing.createEl("li",{text:name.replace(/_/g," ")+" — "+value});
+        }
+        c.createEl("p",{text:"No email was sent, scheduled or modified by this check."});
+        new Setting(c).addButton(b=>b.setButtonText("Close").onClick(()=>this.close()));
+    }
+    onClose():void{this.contentEl.empty();}
+}
+
 class HakiSendManualDraftConflictModal extends Modal {
     private acknowledged=false;
     private busy=false;
@@ -2025,6 +2053,12 @@ export default class HakiSendPublisherPlugin
             id: "recover-acelle-campaign-draft-receipt",
             name: "HakiSend: Recover Campaign Draft Receipt (read-only lookup)",
             callback:async()=>{await this.recoverManualPrivatePromotion();},
+        });
+
+        this.addCommand({
+            id: "inspect-email-delivery-readiness",
+            name: "HakiSend: Check Acelle Email Delivery Readiness (read-only)",
+            callback:async()=>{await this.openManualDeliveryReadiness();},
         });
 
         this.addCommand({
@@ -2355,6 +2389,25 @@ export default class HakiSendPublisherPlugin
             new Notice("Campaign Draft receipt verified on HakiSend. NOT sent or scheduled.");
         }catch{
             new Notice("No verified unsent Campaign receipt available. Nothing was sent or changed remotely; check HakiSend before taking another action.");
+        }
+    }
+
+    private async openManualDeliveryReadiness():Promise<void> {
+        try {
+            const {plan,fields,origin,token}=await this.promotionContext();
+            const requestUid=fields.hakisend_acelle_promotion_request_uid;
+            const campaignUid=fields.hakisend_acelle_campaign_uid;
+            if(typeof requestUid!=="string"||typeof campaignUid!=="string"||
+               fields.hakisend_acelle_campaign_status!=="new_draft_not_sent") {
+                throw Error("First create and verify the native Acelle Campaign Draft.");
+            }
+            const readiness=await explicitlyReadDeliveryReadiness(
+                req=>requestUrl(req),origin,plan.siteUid,plan.draftUid,
+                requestUid,campaignUid,token
+            );
+            new HakiSendEmailDeliveryReadinessModal(this.app,readiness).open();
+        }catch {
+            new Notice("Email readiness cannot be verified. The server feature may be OFF, the Draft changed, or access was revoked. Nothing was sent.");
         }
     }
 
