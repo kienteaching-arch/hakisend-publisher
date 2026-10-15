@@ -14,10 +14,11 @@ import { Modal,
 import {requestPrivateDraft} from "./email/hakisend-draft-api";
 import {parsePrivateDraftList, parsePrivateDraftDetail, type PrivateDraftListRow, type PrivateDraftReadOnlyDetail} from "./email/private-draft-list";
 import {
-    parseStandalonePlan, extractStandaloneEmailBody, isAudience, isRevisionConflict, canAdoptRevision,
+    parseStandalonePlan, extractStandaloneEmailBody, isAudience, isRevisionConflict,
     decorateLocalPlan, type StandalonePlan, type Audience,
 } from "./email/private-draft-contract";
 import {explicitlySavePrivateDraft} from "./email/explicit-private-draft-save";
+import {verifyManualConflictAdoption, markManualConflictPending} from "./email/manual-conflict-adoption";
 import {explicitlyPromotePrivateDraft, explicitlyRecoverPrivatePromotion, requestPromotion, type PromotionSender, type PromotionReceipt} from "./email/private-draft-promotion";
 import {explicitlyReadDeliveryReadiness, type DeliveryReadiness} from "./email/delivery-readiness";
 import {buildCalendarReadRequest, validateHakiSendCalendar, type ValidatedCalendarSnapshot} from "./calendar/server-calendar-contract";
@@ -2089,13 +2090,15 @@ class HakiSendManualDraftConflictModal extends Modal {
         const c=this.contentEl;c.empty();
         c.createEl("h2",{text:"Private Draft conflict · read-only comparison"});
         c.createEl("p",{text:"Local base revision "+this.plan.revision+" differs from server revision "+this.remote.revision+". Nothing has been overwritten."});
-        c.createEl("h3",{text:"Local Markdown (unchanged)"});
+        c.createEl("p",{text:"Local subject: "+this.plan.subject});
+        c.createEl("p",{text:"Server subject: "+this.remote.subject});
+        c.createEl("h3",{text:"Local Markdown at conflict detection"});
         c.createEl("pre",{text:this.plan.body});
         c.createEl("h3",{text:"HakiSend server Markdown (read-only)"});
         c.createEl("pre",{text:this.remote.body});
-        c.createEl("p",{text:"Merge content manually in the local note. Accepting the revision only updates local revision metadata; it never saves to HakiSend."});
+        c.createEl("p",{text:"Compare both subjects and Markdown bodies. You may merge changes in your local note. Accepting the revision only advances its CAS base and marks it UNSAVED; it never writes to HakiSend. Use a separate explicit Save after review."});
         new Setting(c)
-            .setName("I compared both versions and handled all differences in my note")
+            .setName("I compared both versions and deliberately chose or merged my local content")
             .addToggle(t=>t.setValue(false).onChange(v=>{this.acknowledged=v;}));
         new Setting(c)
             .addButton(b=>b.setButtonText("Close without changes").onClick(()=>this.close()))
@@ -2624,25 +2627,32 @@ export default class HakiSendPublisherPlugin
                             const fresh=parsePrivateDraftDetail(
                                 await requester("drafts/"+plan.draftUid),plan.draftUid
                             );
-                            if(!canAdoptRevision(plan.draftUid,plan.revision??0,{
-                                uid:fresh.uid,revision:fresh.revision,status:"private_draft",
-                                send_enabled:false,subject:fresh.subject
-                            },remote.revision)){
-                                throw Error("Remote revision changed again.");
-                            }
+                            const acceptedRevision=verifyManualConflictAdoption(
+                                plan,remote,fresh
+                            );
+                            // The owner may have manually merged either body
+                            // while this read-only comparison was open. Never
+                            // silently choose a winning Markdown body.
                             const currentRaw=await this.app.vault.read(file);
-                            if(extractStandaloneEmailBody(currentRaw)!==plan.body) {
-                                throw Error("Local content changed during conflict review.");
-                            }
+                            extractStandaloneEmailBody(currentRaw);
+                            await this.app.vault.process(file,raw=>{
+                                if(raw!==currentRaw){
+                                    throw Error("Local Markdown changed during conflict adoption.");
+                                }
+                                return markManualConflictPending(raw,acceptedRevision);
+                            });
                             await this.app.fileManager.processFrontMatter(file,fm=>{
                                 if(fm.site_uid!==plan.siteUid ||
                                     fm.hakisend_remote_email_draft_uid!==plan.draftUid ||
-                                    fm.hakisend_remote_email_revision!==plan.revision) {
+                                    fm.hakisend_remote_email_revision!==plan.revision ||
+                                    fm.hakisend_remote_email_status!=="private_draft" ||
+                                    fm.email_list_uid!==chosenListUid) {
                                     throw Error("Local Draft identity changed.");
                                 }
-                                fm.hakisend_remote_email_revision=fresh.revision;
-                                // Do not mark it saved; the user must manually merge
-                                // and initiate another explicit Save.
+                                fm.hakisend_remote_email_revision=acceptedRevision;
+                                fm.hakisend_remote_email_status="conflict_reviewed";
+                                // Not saved or promoted. A separate manual
+                                // Save with CAS and readback remains required.
                             });
                         }).open();
                     }
