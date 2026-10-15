@@ -120,3 +120,11 @@ explicitly approved by the owner.
 - Backend candidate route is feature-OFF and unmounted in installed Sites. Client refuses forged `ready_to_send=true`, any `send_authorized=true` or `schedule_authorized=true`, unexpected compliance value, mismatched owner/Site/Request/Draft/Campaign or unknown contract fields. Consent/unsubscribe/suppression/quota/provider are reported only as `unverified`.
 - Correct real Acelle Campaign ID format is PHP `HasUid` 13 lowercase hex; Site, Private Draft and request are UUID. Delivery preflight now uses that distinction.
 - Node22 CI tests validate strict GET-only transport, no retries, identity binding and no false authorization. This is a new diagnostic contract only and **is not** a production-ready send confirmation.
+
+
+## 2026-10-15 — Native unsubscribe HTML + audience status snapshot (no send)
+
+- Backend Campaign creation now appends one trusted canonical native Acelle `{{ unsubscribe_url }}` anchor to the uploaded HTML Template after escaping Markdown; original authoring Markdown is unchanged. Author-controlled `{{ ... }}` / `{% ... %}` template instructions are rejected. The unsubscribe link is not proof of successful signed per-recipient URL resolution or legal compliance.
+- Readiness adds `native_unsubscribe_markup_present` structural check. Native Acelle list pivot must be exact owner, unsegmented and non-excluded; segment/foreign/excluded pivots cannot be interpreted as the chosen whole-list recipient base.
+- The user-triggered Obsidian readiness dialog shows a privacy-safe count snapshot of Acelle subscriber statuses for the one authorized list, separating subscribed/unsubscribed/blacklisted/spam-reported/unconfirmed/other. It **never** equates subscribed with proven consent, or status counts with complete suppression.
+- Contract validator strictly rejects an unknown `audience_status_counts` source, unsafe/negative/overflow/mismatched totals, extra PII fields, or fabricated `consent_verified`/`suppression_verified`. All candidate functionality remains unmounted, flags OFF, not deployed, not sent, not UAT-approved.
