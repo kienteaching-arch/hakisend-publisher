@@ -1841,6 +1841,14 @@ class HakiSendEmailDeliveryReadinessModal extends Modal {
             +" · Unconfirmed "+counts.unconfirmed
             +" · Other "+counts.other});
         c.createEl("p",{text:"These are status counts, NOT proof of consent or complete suppression. No subscriber addresses were retrieved."});
+        const overlap=this.data.blacklist_overlap;
+        c.createEl("h3",{text:"Acelle blacklist overlaps (counts only)"});
+        c.createEl("p",{text:"Subscribed entries: "+overlap.subscribed_total
+            +" · Owner blacklist overlap: "+overlap.owner_blacklist_overlap
+            +" · Global blacklist overlap: "+overlap.global_blacklist_overlap
+            +" · Either blacklist: "+overlap.either_blacklist_overlap
+            +" · Neither blacklist: "+overlap.without_either_blacklist_overlap});
+        c.createEl("p",{text:"Global blacklist policy is unverified. These are read-only matches, not recipient-time suppression or permission to send."});
         c.createEl("h3",{text:"Required evidence not yet verified"});
         const missing=c.createEl("ul");
         for(const [name,value] of Object.entries(this.data.compliance)){
