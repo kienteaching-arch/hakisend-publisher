@@ -128,3 +128,11 @@ explicitly approved by the owner.
 - Readiness adds `native_unsubscribe_markup_present` structural check. Native Acelle list pivot must be exact owner, unsegmented and non-excluded; segment/foreign/excluded pivots cannot be interpreted as the chosen whole-list recipient base.
 - The user-triggered Obsidian readiness dialog shows a privacy-safe count snapshot of Acelle subscriber statuses for the one authorized list, separating subscribed/unsubscribed/blacklisted/spam-reported/unconfirmed/other. It **never** equates subscribed with proven consent, or status counts with complete suppression.
 - Contract validator strictly rejects an unknown `audience_status_counts` source, unsafe/negative/overflow/mismatched totals, extra PII fields, or fabricated `consent_verified`/`suppression_verified`. All candidate functionality remains unmounted, flags OFF, not deployed, not sent, not UAT-approved.
+
+
+## 2026-10-15 — Owner/global blacklist overlap & cold credit/rate snapshot
+
+- Manual-only delivery readiness now returns read-only **local-owner and global blacklist overlap counts**, with union deduplication and tenant scoping. The UI shows only aggregates, not subscriber email addresses. Real suppression policy, bounces, complaints, active consent and recipient-time eligibility remain **unverified**.
+- The same modal shows the **Acelle cold subscription credit snapshot** and the **configured plan send-rate cap**. These are NOT the live hot credit balance or the remaining sliding-window rate. No state is consumed, no send capacity reserved, and no delivery is authorized.
+- Client contract rejects mismatched aggregate counts, extra private fields, fake suppression clearances, unsafe credit values, fake unlimited grants, unauthorized rate formats or any 'send_authorized' / 'quota_verified' claims. A single explicit GET only; backend feature flags all default OFF, routes unmounted.
+- Last remaining milestones before Email UAT: individual consent provenance, runtime suppression and quota reservation, per-subscriber unsubscribe validation, Acelle/provider receipts, safe scheduling/cancel and explicit user confirmation. Calendar final follows Email, and Phase 3A manual Markdown sync remains blocked.
