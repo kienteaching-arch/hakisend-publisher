@@ -13,6 +13,10 @@ jobs:
   verify-and-build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # CircleCI GitHub-Actions compatibility runner may have root-owned ~/.npm.
+      # Use a separate writable job-local cache; never chmod/chown the host home.
+      NPM_CONFIG_CACHE: /tmp/hakisend-publisher-npm-cache
     steps:
       - name: Checkout exact branch source
         uses: actions/checkout@v4
@@ -20,9 +24,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
+      - name: Check isolated npm cache permissions
+        run: |
+          mkdir -p "$NPM_CONFIG_CACHE"
+          test -w "$NPM_CONFIG_CACHE"
+          test "$(npm config get cache)" = "$NPM_CONFIG_CACHE"
+          echo 'CI_NPM_CACHE_ISOLATED_WRITABLE=PASS'
       - name: Install locked dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
       - name: Source provenance and contract tests (no sending)
         run: node --experimental-strip-types --test tests/*.test.mjs
       - name: TypeScript compile safety
