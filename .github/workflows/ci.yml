@@ -1,0 +1,42 @@
+name: HakiSend Publisher CircleCI compatibility verification (no production)
+
+# Explicitly manual on GitHub. CircleCI's separately configured
+# pipeline source is allowed to select this file on the Draft branch.
+# Do not double-run PRs on GitHub-hosted runners after minutes reset.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact branch source
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Source provenance and contract tests (no sending)
+        run: node --experimental-strip-types --test tests/*.test.mjs
+      - name: TypeScript compile safety
+        run: npx tsc --noEmit
+      - name: Compile Obsidian development bundle (not a release)
+        run: npm run build
+      - name: Verify development artifacts without packaging
+        run: |
+          test -s main.js
+          test -s manifest.json
+          test -s styles.css
+          node -e "const m=require('./manifest.json'); if(m.id!=='hakisend-publisher'||m.isDesktopOnly!==false)process.exit(1)"
+      - name: Report package provenance gate (informational only)
+        run: node scripts/release-provenance.mjs --status
+
+# The installable plugin gate deliberately stays absent here.
+# No deploy, no artifact upload, no GitHub secrets, no delivery or sync.
