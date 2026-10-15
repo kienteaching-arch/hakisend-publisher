@@ -39,6 +39,43 @@ The current public repository contains **only the Publisher client**, never
 the private Laravel mirror. The owner-tested ZIP's compiled artifacts must not
 be copied into editable `src/main.ts` or falsely labelled a complete port.
 
+## 2026-10-15 — Editable TypeScript parity advances (NOT release-ready)
+
+The exact owner-uploaded v0.1.9 ZIP was independently re-read in the working
+container. ZIP SHA256 remains
+`2157b02948bd7d39c5f34cca198f7b85af5b1c793b667c93e58b9aa86d7293d2`.
+Original `source/main.js` includes the local Email Planner and the opt-in
+`reconnect-email-draft-access` flow, which the v0.1.3 TypeScript baseline did
+not expose.
+
+This Draft branch now has a maintainable forward-port rather than copying or
+renaming any compiled v0.1.9 artifact:
+
+- `src/email/local-email-planner.ts`: editable local Standalone and Post-linked
+  Email Plan normalization, explicit ISO 8601 timezone, Vault-path validation,
+  safe YAML serialization, local-only status and two no-send policies. The
+  `src/main.ts` command palette, modal, note browser and ribbon are wired.
+- `src/email/email-connect-scope.ts`: exact Publishing OAuth scope proof and
+  separately opt-in `email:read` + `email:compose` evidence; rejects
+  `email:send`, `email:schedule` and unexpected rights.
+- `src/main.ts`: explicit Email Draft reconnect on the command palette and
+  Settings, PKCE `email_access_requested=read_compose` only when chosen,
+  new-token Site GET before replacing the old credential, and rollback of
+  previous Secret Storage token/settings if activation/discovery fails.
+- `tests/local-email-planner.test.mjs`,
+  `tests/email-connect-scope.test.mjs`, and
+  `tests/runtime-email-reconnect.test.cjs` exercise contract parity,
+  scoped token safety and the actual compiled Obsidian development plugin.
+  Runtime tests are required AFTER compiling `main.js` in CircleCI.
+
+**Not yet established**: complete component-by-component v0.1.9 runtime
+equivalence, on-device Desktop/Mobile owner UAT, real OAuth server consent,
+native Email provider test/send scheduling and receipts, Calendar mutations,
+manual two-way sync, production admin installer safety, and an owner-authorized
+release. The repository manifest/package remain intentionally at v0.1.3.
+Do not set `COMPLETE_EDITABLE_V019_PORT_VERIFIED=YES` on these candidates
+alone, and do not distribute this development bundle as v0.1.9.
+
 ## Required next gates
 
 1. Port each behavior into maintainable TypeScript with recorded regression tests,
