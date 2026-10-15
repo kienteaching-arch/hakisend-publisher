@@ -1860,6 +1860,16 @@ class HakiSendEmailDeliveryReadinessModal extends Modal {
                 +" / "+budget.rate_window_amount+" "+budget.rate_window_unit
             : "Plan rate cap: not configured or no active plan"});
         c.createEl("p",{text:"Live credit balance, rate-window consumption and send quota are UNVERIFIED. A snapshot does not reserve any send capacity."});
+        const provenance=this.data.consent_provenance;
+        c.createEl("h3",{text:"Signup provenance (metadata only)"});
+        c.createEl("p",{text:"Double-opt-in label: "+provenance.double_optin_label
+            +" · Single-opt-in label: "+provenance.single_optin_label
+            +" · Imported: "+provenance.imported_label
+            +" · Admin-added: "+provenance.admin_added_label
+            +" · Unknown: "+provenance.other_or_missing_label});
+        c.createEl("p",{text:"IP metadata present: "+provenance.ip_metadata_present
+            +" / "+provenance.subscribed_total
+            +". Labels and IP metadata do NOT prove marketing consent. Confirmation receipts and consent purpose remain UNVERIFIED."});
         c.createEl("h3",{text:"Required evidence not yet verified"});
         const missing=c.createEl("ul");
         for(const [name,value] of Object.entries(this.data.compliance)){
