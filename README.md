@@ -32,6 +32,31 @@ The authoring commands are:
 - HakiSend: Schedule
 - HakiSend: Publish Now
 
+The development branch also includes these explicit, opt-in Email authoring commands:
+
+- HakiSend: Create Email Plan (local-only)
+- HakiSend: Browse Local Email Plans (Vault only)
+- HakiSend: Save Standalone Email as Private Draft (NOT sent)
+- HakiSend: Browse Private Email Drafts (read-only)
+- HakiSend: Reconnect with Email Draft Access (NOT send)
+
+**Email Plan** creates a local Markdown note under `HakiSend Emails/<Site UID>/`.
+A Standalone Email may record an independent future send intention; a
+Post-linked Email references an editable Post and uses `on_publication`
+intent, not a separate send time. Neither action actually schedules or sends.
+Opening an Email Plan never synchronizes it automatically.
+
+The separate **Reconnect with Email Draft Access** requests exactly
+`email:read` and `email:compose` in addition to standard Publishing scopes.
+It validates the server's scope response and Site-readability BEFORE
+replacing an existing OAuth token, and restores the old token if activation
+fails. The connection does not request `email:send` or `email:schedule`.
+
+**Important:** These new features are only in development Draft PR #2.
+The maintained editable TypeScript source has not yet passed complete
+owner-tested v0.1.9 parity, desktop/mobile UAT, or release packaging. Do
+not treat the GitHub development build as a released installer.
+
 Connection controls are available in the HakiSend Publisher settings.
 
 ## New Post
