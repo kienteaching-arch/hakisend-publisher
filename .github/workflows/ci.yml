@@ -1,0 +1,77 @@
+name: HakiSend Publisher CircleCI compatibility verification (no production)
+
+# Explicitly manual on GitHub. CircleCI's separately configured
+# pipeline source is allowed to select this file on the Draft branch.
+# Do not double-run PRs on GitHub-hosted runners after minutes reset.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # CircleCI GitHub-Actions compatibility runner may have root-owned ~/.npm.
+      # Use a separate writable job-local cache; never chmod/chown the host home.
+      NPM_CONFIG_CACHE: /tmp/hakisend-publisher-npm-cache
+    steps:
+      - name: Checkout exact branch source
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check isolated npm cache permissions
+        run: |
+          mkdir -p "$NPM_CONFIG_CACHE"
+          test -w "$NPM_CONFIG_CACHE"
+          test "$(npm config get cache)" = "$NPM_CONFIG_CACHE"
+          echo 'CI_NPM_CACHE_ISOLATED_WRITABLE=PASS'
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Source provenance and contract tests (no sending)
+        run: node --experimental-strip-types --test tests/*.test.mjs
+      - name: TypeScript compile safety
+        run: npx tsc --noEmit
+      - name: Compile Obsidian development bundle (not a release)
+        run: npm run build
+      - name: Verify built Publisher OAuth reconnect with owner-tested v0.1.9 runtime mocks
+        run: node --test tests/runtime-email-reconnect.test.cjs
+      - name: Verify development bundle ingredients before test-Vault packaging
+        run: |
+          test -s main.js
+          test -s manifest.json
+          test -s styles.css
+          node -e "const m=require('./manifest.json'); if(m.id!=='hakisend-publisher'||m.isDesktopOnly!==false)process.exit(1)"
+      - name: Build and verify deterministic development UAT ZIP (not a release)
+        run: |
+          set -euo pipefail
+          node scripts/package-development-uat.mjs | tee /tmp/publisher-dev-uat.txt
+          grep -Fxq 'DEVELOPMENT_UAT_ONLY=YES' /tmp/publisher-dev-uat.txt
+          grep -Fxq 'OFFICIAL_RELEASE=NO' /tmp/publisher-dev-uat.txt
+          ZIP=dist/hakisend-publisher-development-uat.zip
+          test -s "$ZIP"
+          unzip -tq "$ZIP"
+          test "$(unzip -Z1 "$ZIP" | wc -l)" -eq 5
+          test "$(unzip -Z1 "$ZIP" | sort)" = "$(printf '%s\n' DEV-UAT-NOT-A-RELEASE.txt checksums.sha256 main.js manifest.json styles.css | sort)"
+          mkdir -p /tmp/hakisend-obsidian-dev-uat-vault
+          unzip -qo "$ZIP" -d /tmp/hakisend-obsidian-dev-uat-vault
+          (cd /tmp/hakisend-obsidian-dev-uat-vault && sha256sum -c checksums.sha256)
+          cmp main.js /tmp/hakisend-obsidian-dev-uat-vault/main.js
+          cmp manifest.json /tmp/hakisend-obsidian-dev-uat-vault/manifest.json
+          cmp styles.css /tmp/hakisend-obsidian-dev-uat-vault/styles.css
+          grep -Fq 'NOT RELEASE-READY' /tmp/hakisend-obsidian-dev-uat-vault/DEV-UAT-NOT-A-RELEASE.txt
+          BEFORE=$(sha256sum "$ZIP" | cut -d' ' -f1)
+          node scripts/package-development-uat.mjs >/dev/null
+          AFTER=$(sha256sum "$ZIP" | cut -d' ' -f1)
+          test "$BEFORE" = "$AFTER"
+          echo 'RESULT=DETERMINISTIC_OBSIDIAN_TEST_VAULT_ZIP_PASS_NO_RELEASE'
+      - name: Report package provenance gate (informational only)
+        run: node scripts/release-provenance.mjs --status
+
+# The installable plugin gate deliberately stays absent here.
+# No deploy, no external artifact upload, no GitHub secrets, no delivery or sync.
+# Development ZIP is generated only within CI job; official release gate unchanged.

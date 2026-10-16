@@ -1,0 +1,152 @@
+# Pre-UAT integration gate — HakiSend Publisher / Email / Calendar / two-way Markdown sync
+
+Date: 2026-10-14. Status: **ACTIVE DEVELOPMENT, NOT A RELEASE**.
+
+## Product completion contract
+
+A single owner-tested desktop/mobile Publisher must be able to select a
+HakiSend tenant Site and Category; publish/update Posts; create and browse
+Private Standalone Email Drafts; explicitly test-send / send-now / schedule
+an authorized campaign; create a Post-linked Email which may dispatch only
+after a server-owned due reconciler verifies the Post is actually guest
+visible; display a server-authoritative consolidated Calendar; and allow
+explicit **Sync All** or user-selected per-Post **two-way Markdown sync**
+with conflict preview and backup, never silent pull/overwrite.
+
+## Source provenance (independently verified actual ZIP bytes)
+
+Owner-tested Obsidian v0.1.9 test vault ZIP:
+SHA256 `2157b02948bd7d39c5f34cca198f7b85af5b1c793b667c93e58b9aa86d7293d2`.
+
+It contains `source/main.js` (SHA256
+`0e1e0f9935f401eeaf5c2510edac69df7de0f4ea2c87a36b158a32bd77f`),
+the `private-draft-management.cjs` component and its tests, plus a
+compiled Obsidian artifact. It does **not** provide a complete corresponding
+**editable TypeScript v0.1.9 source tree**. Current GitHub TypeScript
+Publisher sources still identify as v0.1.3. Do not copy the compiled
+v0.1.9 file into `src/main.ts`, rename versions or falsely mark provenance
+reconciled. Preserve the source gate until a matched TypeScript port is tested.
+
+## New implementation candidates on this branch
+
+- `src/calendar/unified-calendar.ts`: pure, timezone-aware Post /
+  Post-linked Email / Standalone Email Calendar grouping. Correct UTC-to-IANA
+  local-day grouping (including DST), server-confirmed versus tentative,
+  blocked states, standalone schedule independence, linked Post clock and
+  advisory collisions. Never schedules/sends.
+- `src/sync/manual-markdown-sync-plan.ts`: explicit Sync All / selected
+  Post planner; baseline state token and checksum reconciliation, Site-scoped
+  identity, conflict preservation and no implicit write, delete or HTML→MD.
+  Server CAS support is required before it can even **propose** a push.
+- Node 22 tests in `tests/unified-calendar.test.mjs` and
+  `tests/manual-markdown-sync-plan.test.mjs`, plus existing Email contract
+  and provenance tests. CI builds the dev bundle but **withholds release
+  packaging** absent source reconciliation and owner authorization.
+
+**Implemented in this development iteration (NOT UAT):** a manually opened,
+Site-scoped read-only Private Draft browser with on-demand plain-text detail;
+manual Standalone Email Draft POST/PUT with stable persisted request UID,
+revision preflight, fresh HTTP read-back and guarded local saved status;
+read-only HTTP 409 Markdown comparison plus acknowledged revision-only
+adoption; and a manually refreshed Site-scoped Calendar view consuming the
+`hks_calendar_v1` OAuth candidate GET contract. Calendar data never grants
+Email send authority. These views still need real plugin/runtime UAT.
+
+**Not yet implemented**: Sync All/per-Post menu and selection workflow,
+local backup/restore, server-installed Calendar endpoint (a real MySQL8
+route candidate exists but its feature flag is OFF), lossless change-feed
+and tombstones, a production-authorized conditional update route, actual
+send-and-schedule service, full v0.1.9 TypeScript parity, or an approved
+production installer.
+
+## Backend reference
+
+Private repository:
+`kienteaching-arch/hakisend-backend-integration`,
+Draft PR #2: `work/mirror-laravel-bootstrap-20261014`.
+
+Real Laravel/Acelle/Sites/Membership/MySQL isolated CI has verified
+Guest Email Preview and user-triggered unscheduled Acelle Campaign Draft,
+tenant guards, idempotency, rollback and OAuth scopes.
+`src/Sync/ConditionalPostUpdateCandidate.php` is a new feature-OFF
+CAS **internal** candidate and currently under separate real MySQL CI.
+It is NOT an installed two-way write API.
+
+## Hard release blockers
+
+1. Reconcile v0.1.9 actual working behavior into editable TypeScript,
+   repeat desktop and mobile original regression tests.
+2. Finish genuine standalone send / test-send / scheduling, independently
+   approved scopes, quota/compliance/verified sender, and send receipts.
+3. Build a server-owned due reconciler for Post-linked Email; no send
+   based only on a publication webhook or snapshot containing future Posts.
+4. Implement and tenant-authorize server Calendar read/query and safe
+   scheduling mutations; validate DST, cancellation, reschedule,
+   simultaneous changes and no phantom scheduled items.
+5. Add server-enforced conditional Post update using latest `state_token`
+   and trustworthy Markdown source provenance; audit Tags/Translations
+   writers' parent-row locking, read pagination/change-feed, tombstones.
+6. Integrate UI with explicit Sync All, per-Post selection, preview/diff,
+   on-disk backup, read-back verification and conflict copies.
+7. Complete owner-verified full Sites plugin ZIP using EXISTING Admin Plugin
+   installer/update/rollback, after trusted signing, migration/backup and
+   staging QA. No SCP into production.
+8. Owner approval and UAT on an isolated tenant with fake recipients,
+   revocation/expiry and full workflow recovery.
+
+## Release decision
+
+`PRE_UAT_RC_READY=NO`. `PRODUCTION_CHANGES=NONE`.
+`SEND_AND_SCHEDULING=DISABLED`. `TWO_WAY_SYNC_WRITES=DISABLED`.
+
+No workflow shall publish a downloadable installer or label the build
+final until all eight gates are demonstrated on matching source and
+explicitly approved by the owner.
+
+
+## New candidate (14 Oct 2026) — user-initiated Acelle Draft promotion
+
+- Editable TS now has a separate, restrictive no-send promotion transport and two explicit Obsidian commands: **Create Acelle Campaign from Private Draft (NOT sent)** and **Recover Campaign Draft Receipt (read-only lookup)**.
+- The Create modal shows source/revision and cannot submit without the user's checkbox confirmation, verified sender fields, OAuth, and an already saved Site Private Draft. Site-owned list is never overridable from the promotion payload.
+- On confirmation, re-read remote source; compare exact draft UID/revision/subject/Markdown; durably persist a cryptographic request UID to frontmatter **before POST**. A second attempt with existing UID cannot create another Campaign; user must instead call manual GET receipt recovery. The original Markdown body is not overwritten.
+- After POST, user gets a fresh server GET receipt. Only a matching, native NEW unscheduled Acelle Campaign UID is written into local frontmatter. Ambiguous/unauthorized/changed states are never marked delivered or scheduled; there are no automatic retries.
+- The server route and both candidates still remain unmounted and feature-OFF in the installed Sites plugin. This is **development source only**. Actual delivery/schedule commands, consent/unsubscribe, template parity and final owner-tested Obsidian v0.1.9 equivalence are all **blocked** pending complete UAT.
+- Pure TypeScript CI and Obsidian TypeScript compile/build must pass. Candidate backend isolated Laravel/MySQL8 route GET/POST CI must pass before claiming interoperable readback.
+
+
+## 2026-10-15 — Acelle delivery readiness read-only diagnostic
+
+- Obsidian adds a deliberate command **HakiSend: Check Acelle Email Delivery Readiness (read-only)** for a verified Standalone source with the exact native Campaign promotion receipt ID. The UI shows owner/list/sender/native Campaign checks and explicit missing compliance evidence. No sending or scheduling actions exist in this modal.
+- Backend candidate route is feature-OFF and unmounted in installed Sites. Client refuses forged `ready_to_send=true`, any `send_authorized=true` or `schedule_authorized=true`, unexpected compliance value, mismatched owner/Site/Request/Draft/Campaign or unknown contract fields. Consent/unsubscribe/suppression/quota/provider are reported only as `unverified`.
+- Correct real Acelle Campaign ID format is PHP `HasUid` 13 lowercase hex; Site, Private Draft and request are UUID. Delivery preflight now uses that distinction.
+- Node22 CI tests validate strict GET-only transport, no retries, identity binding and no false authorization. This is a new diagnostic contract only and **is not** a production-ready send confirmation.
+
+
+## 2026-10-15 — Native unsubscribe HTML + audience status snapshot (no send)
+
+- Backend Campaign creation now appends one trusted canonical native Acelle `{{ unsubscribe_url }}` anchor to the uploaded HTML Template after escaping Markdown; original authoring Markdown is unchanged. Author-controlled `{{ ... }}` / `{% ... %}` template instructions are rejected. The unsubscribe link is not proof of successful signed per-recipient URL resolution or legal compliance.
+- Readiness adds `native_unsubscribe_markup_present` structural check. Native Acelle list pivot must be exact owner, unsegmented and non-excluded; segment/foreign/excluded pivots cannot be interpreted as the chosen whole-list recipient base.
+- The user-triggered Obsidian readiness dialog shows a privacy-safe count snapshot of Acelle subscriber statuses for the one authorized list, separating subscribed/unsubscribed/blacklisted/spam-reported/unconfirmed/other. It **never** equates subscribed with proven consent, or status counts with complete suppression.
+- Contract validator strictly rejects an unknown `audience_status_counts` source, unsafe/negative/overflow/mismatched totals, extra PII fields, or fabricated `consent_verified`/`suppression_verified`. All candidate functionality remains unmounted, flags OFF, not deployed, not sent, not UAT-approved.
+
+
+## 2026-10-15 — Owner/global blacklist overlap & cold credit/rate snapshot
+
+- Manual-only delivery readiness now returns read-only **local-owner and global blacklist overlap counts**, with union deduplication and tenant scoping. The UI shows only aggregates, not subscriber email addresses. Real suppression policy, bounces, complaints, active consent and recipient-time eligibility remain **unverified**.
+- The same modal shows the **Acelle cold subscription credit snapshot** and the **configured plan send-rate cap**. These are NOT the live hot credit balance or the remaining sliding-window rate. No state is consumed, no send capacity reserved, and no delivery is authorized.
+- Client contract rejects mismatched aggregate counts, extra private fields, fake suppression clearances, unsafe credit values, fake unlimited grants, unauthorized rate formats or any 'send_authorized' / 'quota_verified' claims. A single explicit GET only; backend feature flags all default OFF, routes unmounted.
+- Last remaining milestones before Email UAT: individual consent provenance, runtime suppression and quota reservation, per-subscriber unsubscribe validation, Acelle/provider receipts, safe scheduling/cancel and explicit user confirmation. Calendar final follows Email, and Phase 3A manual Markdown sync remains blocked.
+
+
+## 2026-10-15 — Acelle signup provenance labels (not verified consent)
+
+- The backend now has a separate default-OFF source-label snapshot for a tenant-authorized mailing list. It counts subscribed subscribers labeled double opt-in, single opt-in, imported, admin-added, or unknown; only counts IP metadata presence, never IP values, raw emails or subscriber identities.
+- Obsidian's manual-only readiness dialog displays these counts. Its strict contract rejects negative/inconsistent totals, forged double-opt-in receipts, marketing-purpose consent proof, or any new PII fields. `subscribed`, `double` and nonempty `ip` never authorize email, and `compliance.consent` remains `unverified`.
+- Next release gate must be **real immutable purpose-specific consent evidence** captured by a trusted server-side subscription flow, verified at delivery handoff and revocable at any time. Historical imported or manually added contacts cannot be silently marked as opted in. No send, schedule or write commands have been unlocked by this diagnostic.
+
+## 2026-10-15 — Subscriber consent evidence ledger (candidate-only)
+
+- A new Backend **unmounted and disabled by default** candidate stores exact localized notice text/hash, expiring HMAC-protected single-use challenge tokens and scoped challenge-redemption/withdrawal events in MySQL8. **No trusted challenge email delivery or subscriber-facing confirmation handler exists yet.** Never return tokens to site owners or Obsidian Publisher OAuth callers.
+- The manual read-only Email Readiness modal now presents `consent_token_receipts`. When the ledger is not installed/enabled, its counts are `null` and status `disabled`, explicitly UNKNOWN rather than 0. Candidate redemptions are diagnostic counts, not verified mailbox ownership or marketing consent.
+- Publisher TS response parser rejects fabricated token-ledger permissions, guessed counts, negative/noninteger/inconsistent counts, extra PII fields, or a payload that claims real consent or sending authorization.
+- Backend remains draft/unmounted with all send/schedule APIs OFF. Real subscriber-controlled token distribution, notice publication, Acelle unsubscribe event hooks, recipient-time consent/suppression/quota checks and provider receipts are mandatory release gates before sending. No user UAT or v0.1.9 source parity yet.

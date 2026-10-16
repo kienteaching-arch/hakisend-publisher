@@ -32,6 +32,53 @@ The authoring commands are:
 - HakiSend: Schedule
 - HakiSend: Publish Now
 
+The development branch also includes these explicit, opt-in Email authoring commands:
+
+- HakiSend: Create Email Plan (local-only)
+- HakiSend: Browse Local Email Plans (Vault only)
+- HakiSend: Save Standalone Email as Private Draft (NOT sent)
+- HakiSend: Browse Private Email Drafts (read-only)
+- HakiSend: Inspect Native Acelle Email Schedule (GET only)
+- HakiSend: Inspect Acelle Send/Bounce Evidence (GET only)
+- HakiSend: Reconnect with Email Draft Access (NOT send)
+
+**Email Plan** creates a local Markdown note under `HakiSend Emails/<Site UID>/`.
+A Standalone Email may record an independent future send intention; a
+Post-linked Email references an editable Post and uses `on_publication`
+intent, not a separate send time. Neither action actually schedules or sends.
+Opening an Email Plan never synchronizes it automatically.
+
+The separate **Reconnect with Email Draft Access** requests exactly
+`email:read` and `email:compose` in addition to standard Publishing scopes.
+It validates the server's scope response and Site-readability BEFORE
+replacing an existing OAuth token, and restores the old token if activation
+fails. The connection does not request `email:send` or `email:schedule`.
+
+The **Inspect Native Acelle Email Schedule** command reads only the currently
+open Standalone Email Plan with its pinned `site_uid` and previously verified
+`hakisend_acelle_campaign_uid`. It sends one authenticated GET; it cannot
+schedule, cancel, send or change local Markdown. The diagnostic checks the
+native Acelle status against a Site-scoped server ledger but **never**
+confirms delivery, provider acceptance or a verified Calendar timestamp.
+The corresponding Backend route is deliberately unmounted, so the command
+will report unavailable until authorized staging integration exists.
+
+The **Inspect Acelle Send/Bounce Evidence** command reads one owner-scoped
+Acelle Campaign, with a separate confirmed Site-to-Campaign ledger association.
+It reports local Acelle sent, failed, duplicate and unique bounce/complaint
+tracking counts, never email addresses, message IDs or raw provider payloads.
+If Acelle shows sending events while the internal intent is only reserved or
+cancelled, the UI warns about an unresolved handoff conflict. **An Acelle
+`sent` tracking record is not proof of inbox delivery or a provider handoff
+receipt.** There is no automatic Vault edit, queue, send or Calendar
+confirmation. Both Backend diagnostic endpoints remain feature-OFF and
+unmounted until staging UAT and owner-approved installation.
+
+**Important:** These new features are only in development Draft PR #2.
+The maintained editable TypeScript source has not yet passed complete
+owner-tested v0.1.9 parity, desktop/mobile UAT, or release packaging. Do
+not treat the GitHub development build as a released installer.
+
 Connection controls are available in the HakiSend Publisher settings.
 
 ## New Post

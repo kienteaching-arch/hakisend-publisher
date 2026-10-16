@@ -11,6 +11,26 @@ import { Modal,
     requestUrl,
 } from "obsidian";
 
+import {requestPrivateDraft} from "./email/hakisend-draft-api";
+import {parsePrivateDraftList, parsePrivateDraftDetail, type PrivateDraftListRow, type PrivateDraftReadOnlyDetail} from "./email/private-draft-list";
+import {
+    parseStandalonePlan, extractStandaloneEmailBody, isAudience, isRevisionConflict,
+    decorateLocalPlan, type StandalonePlan, type Audience,
+} from "./email/private-draft-contract";
+import {explicitlySavePrivateDraft} from "./email/explicit-private-draft-save";
+import {verifyManualConflictAdoption, markManualConflictPending} from "./email/manual-conflict-adoption";
+import {explicitlyPromotePrivateDraft, explicitlyRecoverPrivatePromotion, requestPromotion, type PromotionSender, type PromotionReceipt} from "./email/private-draft-promotion";
+import {explicitlyReadDeliveryReadiness, type DeliveryReadiness} from "./email/delivery-readiness";
+import {buildNativeScheduleDiagnosticRequest,parseNativeScheduleDiagnostic} from "./email/native-schedule-diagnostic";
+import {buildNativeDeliveryEvidenceGet,parseNativeDeliveryEvidence} from "./email/native-delivery-evidence";
+import {buildCalendarReadRequest, validateHakiSendCalendar, type ValidatedCalendarSnapshot} from "./calendar/server-calendar-contract";
+import {
+    normalizeLocalEmailPlan, serializeLocalEmailPlan, localEmailPlanPaths,
+    localEmailSourceContext, type LocalEmailPlannerInput
+} from "./email/local-email-planner";
+import {verifyConnectScopes, verifyEmailReconnectSitesProbe} from "./email/email-connect-scope";
+import {acceptCalendarPage, buildCalendarPageRequest, type CalendarPageSession} from "./calendar/paged-calendar-contract";
+
 /**
  * Fuzzy search across existing folders. Searching by path is more reliable
  * than typing a folder by hand, and works in desktop and mobile Obsidian.
@@ -86,6 +106,7 @@ interface PendingConnection {
     verifier: string;
     apiBaseUrl: string;
     createdAt: number;
+    emailAccessRequested?: boolean;
 }
 
 interface ExchangeResponse {
@@ -1569,6 +1590,722 @@ class HakiSendScheduleModal
     }
 }
 
+
+/**
+ * Source-parity port of the user's owner-tested v0.1.9 offline Email planner.
+ * It creates files in the Vault only after a deliberate Create click.
+ * There is no network call or remote Campaign side effect in either modal.
+ */
+class HakiSendLocalEmailPlannerModal extends Modal {
+    private form: LocalEmailPlannerInput;
+    private conditional: HTMLElement | null = null;
+    private busy = false;
+    constructor(
+        app: App,
+        private readonly sites: readonly HakiSendSite[],
+        defaultSiteUid: string
+    ) {
+        super(app);
+        const file=this.app.workspace.getActiveFile();
+        const fm=file ? (this.app.metadataCache.getFileCache(file)?.frontmatter ?? {}) : {};
+        const source=localEmailSourceContext(file?.path??null,file?.extension??null,
+            fm as Record<string,unknown>);
+        const siteUid=this.sites.some(s=>s.uid===source.sourceSiteUid)
+            ? source.sourceSiteUid
+            : (this.sites.some(s=>s.uid===defaultSiteUid)
+                ? defaultSiteUid : (this.sites[0]?.uid??""));
+        this.form={kind:"standalone",siteUid,subject:"",listUid:"",
+            sendPolicy:"now",scheduleInput:"",...source};
+    }
+    onOpen():void {
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"HakiSend — Create Local Email Plan"});
+        c.createEl("p",{text:"Creates a Markdown note in your Vault only. Nothing is sent, scheduled or published on HakiSend."});
+        if(this.sites.length===0){
+            c.createEl("p",{text:"Connect HakiSend and load at least one authorized Site first."});
+            return;
+        }
+        new Setting(c).setName("Site")
+            .setDesc("This Site is pinned into the local Email Plan.")
+            .addDropdown(d=>{
+                for(const site of this.sites)d.addOption(site.uid,site.name);
+                d.setValue(this.form.siteUid);
+                d.onChange(value=>{this.form.siteUid=value;});
+            });
+        new Setting(c).setName("Email type")
+            .addDropdown(d=>d
+                .addOption("standalone","Standalone Email — independent send intent")
+                .addOption("post_linked_free","Post-linked Email — after publication")
+                .setValue(this.form.kind)
+                .onChange(value=>{
+                    this.form.kind=value as LocalEmailPlannerInput["kind"];
+                    this.form.sendPolicy=value==="post_linked_free"?"on_publication":"now";
+                    this.form.scheduleInput="";
+                    this.drawConditional();
+                }));
+        new Setting(c).setName("Email subject")
+            .addText(t=>t.setPlaceholder("Email subject")
+                .onChange(value=>{this.form.subject=value;}));
+        new Setting(c).setName("Audience list UID (optional)")
+            .setDesc("This is only a local plan. HakiSend verifies audience ownership and consent later.")
+            .addText(t=>t.setPlaceholder("Authorized list UID")
+                .onChange(value=>{this.form.listUid=value;}));
+        this.conditional=c.createDiv();
+        this.drawConditional();
+        new Setting(c).addButton(b=>b
+            .setButtonText("Create LOCAL Email Plan").setCta()
+            .onClick(async()=>{
+                if(this.busy)return;
+                this.busy=true;b.setDisabled(true);
+                try{
+                    const args:LocalEmailPlannerInput={...this.form};
+                    if(args.kind==="standalone"){
+                        args.sourceNote="";
+                        args.postUid="";
+                        args.sourceSiteUid="";
+                        args.isReadOnlySnapshot=false;
+                    }else{
+                        // A different current Post or changed Site during
+                        // composition cannot silently rebind the source.
+                        const file=this.app.workspace.getActiveFile();
+                        const fm=file
+                            ? (this.app.metadataCache.getFileCache(file)?.frontmatter??{})
+                            : {};
+                        const fresh=localEmailSourceContext(
+                            file?.path??null,file?.extension??null,
+                            fm as Record<string,unknown>);
+                        if(!fresh.sourceNote ||
+                            fresh.sourceNote!==args.sourceNote ||
+                            fresh.sourceSiteUid!==args.sourceSiteUid ||
+                            fresh.postUid!==args.postUid ||
+                            fresh.isReadOnlySnapshot!==args.isReadOnlySnapshot){
+                            throw Error("The source Post changed. Reopen the Email Planner.");
+                        }
+                    }
+                    const draft=normalizeLocalEmailPlan(args);
+                    if(!this.sites.some(s=>s.uid===draft.siteUid)){
+                        throw Error("Selected HakiSend Site is no longer available.");
+                    }
+                    const paths=localEmailPlanPaths(
+                        draft.siteUid,draft.kind,draft.subject
+                    );
+                    // Exactly the owner's tested v0.1.9 folder convention.
+                    if(!this.app.vault.getAbstractFileByPath(paths.root)){
+                        await this.app.vault.createFolder(paths.root);
+                    }
+                    if(!this.app.vault.getAbstractFileByPath(paths.directory)){
+                        await this.app.vault.createFolder(paths.directory);
+                    }
+                    let created:TFile|null=null;
+                    for(let n=1;n<=1000;n++){
+                        const path=paths.directory+"/"+paths.basename+
+                            (n===1?"":" ("+n+")")+".md";
+                        if(this.app.vault.getAbstractFileByPath(path))continue;
+                        // create() is atomic: if another device created the
+                        // same name, it throws. Never overwrite that file.
+                        created=await this.app.vault.create(
+                            path,serializeLocalEmailPlan(draft)
+                        );
+                        break;
+                    }
+                    if(!created)throw Error("Too many duplicate Email Plan names.");
+                    this.close();
+                    await this.app.workspace.getLeaf(true).openFile(created);
+                    new Notice("Local Email Plan created. NOT sent or scheduled.");
+                }catch(err){
+                    const msg=err instanceof Error?err.message:"Unknown failure";
+                    new Notice("Email Plan not created: "+msg.slice(0,180));
+                }finally{
+                    this.busy=false;b.setDisabled(false);
+                }
+            }));
+        c.createEl("p",{text:"Send now and scheduled here describe future intent only. No provider action will be taken from this dialog."});
+    }
+    private drawConditional():void{
+        const c=this.conditional;if(!c)return;c.empty();
+        if(this.form.kind==="post_linked_free"){
+            c.createEl("p",{text:"Editable source Post: "+
+                (this.form.sourceNote??"")});
+            c.createEl("p",{text:"Policy: on publication only. There is no separate Email schedule, and the server must verify public guest visibility before sending."});
+        }else{
+            new Setting(c).setName("Future send policy (local intent)")
+                .addDropdown(d=>d.addOption("now","Send now — future confirmation")
+                    .addOption("scheduled","Independent future schedule")
+                    .setValue(this.form.sendPolicy==="scheduled"?"scheduled":"now")
+                    .onChange(value=>{
+                        this.form.sendPolicy=value as "now"|"scheduled";
+                        this.form.scheduleInput="";
+                        this.drawConditional();
+                    }));
+            if(this.form.sendPolicy==="scheduled"){
+                new Setting(c).setName("UTC instant or ISO 8601 with offset")
+                    .setDesc("Example: 2026-10-16T08:00:00+07:00. This does not schedule HakiSend.")
+                    .addText(t=>t.setPlaceholder("2026-10-16T08:00:00+07:00")
+                        .onChange(value=>{this.form.scheduleInput=value;}));
+            }
+        }
+    }
+    onClose():void {this.conditional=null;this.contentEl.empty();}
+}
+
+class HakiSendLocalEmailPlanBrowserModal extends Modal {
+    onOpen():void{
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"Local HakiSend Email Plans"});
+        c.createEl("p",{text:"Vault-only plans. No entry here is evidence of an actual Campaign schedule or delivery."});
+        const all=this.app.vault.getMarkdownFiles()
+            .filter(file=>file.path.startsWith("HakiSend Emails/"))
+            .sort((a,b)=>a.path.localeCompare(b.path));
+        if(all.length===0){
+            c.createEl("p",{text:"No local Email Plans found."});return;
+        }
+        for(const file of all.slice(0,100)){
+            new Setting(c).setName(file.basename)
+                .setDesc("Local only · NOT sent")
+                .addButton(b=>b.setButtonText("Open").onClick(()=>{
+                    this.close();void this.app.workspace.getLeaf(true).openFile(file);
+                }));
+        }
+        if(all.length>100)c.createEl("p",{text:"Showing 100 of "+all.length+" local notes."});
+    }
+    onClose():void{this.contentEl.empty();}
+}
+
+/**
+ * Explicit read-only Private Email Draft browser for the development source.
+ * Never writes Vault files, schedules Campaigns, or automatically fetches.
+ * The existing Sites API has a hard 50-row bound and NO pagination cursor.
+ */
+class HakiSendPrivateEmailBrowserModal extends Modal {
+    private siteUid = "";
+    private sequence = 0;
+    constructor(
+        app: App,
+        private readonly sites: readonly HakiSendSite[],
+        private readonly loadRows: (siteUid: string) => Promise<PrivateDraftListRow[]>,
+        private readonly loadDetail: (siteUid: string, draftUid: string) => Promise<PrivateDraftReadOnlyDetail>
+    ) {
+        super(app);
+    }
+
+    onOpen(): void {
+        const {contentEl} = this;
+        contentEl.empty();
+        contentEl.createEl("h2", {text:"Private Standalone Email Drafts"});
+        contentEl.createEl("p", {
+            text:"Read-only server view. Nothing will be sent, scheduled, synced, or copied into your Vault."
+        });
+        const results = contentEl.createDiv();
+        new Setting(contentEl)
+            .setName("HakiSend Site")
+            .setDesc("Choose a Site explicitly; emails from other Sites are never requested.")
+            .addDropdown(dropdown => {
+                dropdown.addOption("", "Choose Site");
+                for (const site of this.sites) {
+                    dropdown.addOption(site.uid, site.name);
+                }
+                dropdown.onChange(value => {
+                    this.siteUid = value;
+                    this.sequence++;
+                    results.empty();
+                });
+            });
+        new Setting(contentEl)
+            .addButton(button => button
+                .setButtonText("Load private drafts")
+                .onClick(async () => {
+                    if (!this.siteUid || !this.sites.some(s => s.uid === this.siteUid)) {
+                        new Notice("Choose an authorized HakiSend Site.");
+                        return;
+                    }
+                    const chosen = this.siteUid;
+                    const current = ++this.sequence;
+                    results.empty();
+                    results.createEl("p", {text:"Loading private Email Draft metadata..."});
+                    try {
+                        const rows = await this.loadRows(chosen);
+                        if (current !== this.sequence || chosen !== this.siteUid) return;
+                        results.empty();
+                        results.createEl("p", {
+                            text: rows.length
+                                ? "Only unsent private Draft metadata is shown."
+                                : "No accessible private Email Drafts were returned."
+                        });
+                        const list = results.createEl("ul");
+                        for (const row of rows) {
+                            const item = list.createEl("li");
+                            item.createEl("strong", {text:row.subject});
+                            item.createSpan({text:" · Revision "+row.revision+" · Private Draft — NOT sent"});
+                            const detailBox = item.createDiv();
+                            new Setting(item).addButton(button => button
+                                .setButtonText("Read-only preview")
+                                .onClick(async () => {
+                                    if (chosen !== this.siteUid || current !== this.sequence) return;
+                                    const reqSeq = this.sequence;
+                                    detailBox.empty();
+                                    detailBox.createEl("p", {text:"Reading the private Draft..."});
+                                    try {
+                                        const detail = await this.loadDetail(chosen, row.uid);
+                                        if (reqSeq !== this.sequence || chosen !== this.siteUid) return;
+                                        detailBox.empty();
+                                        detailBox.createEl("p", {text:"Server Draft · Revision "+detail.revision+" · NOT sent"});
+                                        // Render as plain text only: Markdown can contain
+                                        // untrusted HTML and private message content.
+                                        detailBox.createEl("pre", {text:detail.body});
+                                    } catch {
+                                        if (reqSeq !== this.sequence) return;
+                                        detailBox.empty();
+                                        detailBox.createEl("p", {text:"Private Draft preview unavailable."});
+                                    }
+                                }));
+                        }
+                        results.createEl("p", {
+                            text:"HakiSend returns at most 50 records and does not provide a cursor. This view may be incomplete."
+                        });
+                    } catch {
+                        if (current !== this.sequence) return;
+                        results.empty();
+                        results.createEl("p", {
+                            text:"Cannot read this Site's private drafts. Check connection, permissions, or network."
+                        });
+                    }
+                }));
+    }
+
+    onClose(): void {
+        this.sequence++;
+        this.contentEl.empty();
+    }
+}
+
+
+/** Manual Standalone Email Private Draft Save. Never sends, schedules or pulls notes. */
+class HakiSendManualDraftSaveModal extends Modal {
+    private selectedListUid = "";
+    private busy = false;
+
+    constructor(
+        app: App,
+        private readonly plan: StandalonePlan,
+        private readonly authorizedAudiences: readonly Audience[],
+        private readonly onSave: (listUid: string) => Promise<void>
+    ) {
+        super(app);
+        this.selectedListUid = plan.listUid;
+    }
+
+    onOpen(): void {
+        const c = this.contentEl;
+        c.empty();
+        c.createEl("h2", {text:"Save Standalone Email · Private Draft"});
+        c.createEl("p", {
+            text:"This is an explicit save to your own HakiSend Site. It will NOT send, schedule, publish or import any email."
+        });
+        c.createEl("p", {text:"Subject: "+this.plan.subject});
+        c.createEl("p", {text:this.plan.draftUid
+            ? "Existing Private Draft · expected revision "+this.plan.revision
+            : "New Private Draft · request UID preserved for safe recovery"});
+        new Setting(c)
+            .setName("Authorized Email audience")
+            .setDesc("Only a list enabled for this Site may be selected. A saved Draft's audience cannot change.")
+            .addDropdown(dropdown => {
+                dropdown.addOption("", "Choose an audience");
+                for (const item of this.authorizedAudiences) {
+                    dropdown.addOption(item.uid, item.name);
+                }
+                dropdown.setValue(this.authorizedAudiences.some(a => a.uid === this.selectedListUid)
+                    ? this.selectedListUid : "");
+                dropdown.onChange(value => {this.selectedListUid=value;});
+            });
+        new Setting(c)
+            .addButton(button => button
+                .setButtonText("Cancel")
+                .onClick(() => this.close()))
+            .addButton(button => button
+                .setButtonText("Save Private Draft — NOT sent")
+                .setCta()
+                .onClick(async () => {
+                    if (this.busy) return;
+                    if (!this.authorizedAudiences.some(a => a.uid===this.selectedListUid)) {
+                        new Notice("Choose an authorized audience.");
+                        return;
+                    }
+                    this.busy=true;button.setDisabled(true);
+                    try {
+                        await this.onSave(this.selectedListUid);
+                        this.close();
+                        new Notice("Private Email Draft verified on HakiSend. NOT sent or scheduled.");
+                    } catch {
+                        new Notice("Private Draft save could not be verified. Inspect the server Draft before retrying. No automatic retry.");
+                    } finally {
+                        this.busy=false;button.setDisabled(false);
+                    }
+                }));
+    }
+    onClose():void {this.contentEl.empty();}
+}
+
+
+/**
+ * Explicit review-only transition to native Acelle Campaign Draft.
+ * A deliberate confirmation is always required before the one POST.
+ * No delivery, schedule, subscribers, list mutations or auto-retry.
+ */
+class HakiSendManualPromotionModal extends Modal {
+    private fromEmail="";
+    private fromName="";
+    private replyTo="";
+    private acknowledged=false;
+    private busy=false;
+
+    constructor(
+        app:App,
+        private readonly plan:StandalonePlan,
+        private readonly onPromote:(sender:PromotionSender)=>Promise<void>
+    ){super(app);}
+
+    onOpen():void {
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"Create Acelle Campaign Draft · NOT sent"});
+        c.createEl("p",{text:"This copies the current saved Private Draft to one native Acelle Campaign in NEW status. It will NOT send, schedule, or replace the original Markdown."});
+        c.createEl("p",{text:"Subject: "+this.plan.subject});
+        c.createEl("p",{text:"Source: "+this.plan.draftUid+" · Revision "+this.plan.revision});
+        c.createEl("p",{text:"The recipient audience is the Site-authorized list already stored on HakiSend. You cannot change it here."});
+        new Setting(c).setName("Verified From email")
+            .setDesc("This address must already be verified in HakiSend's sending identities.")
+            .addText(input=>input.setPlaceholder("sender@example.com")
+                .onChange(value=>{this.fromEmail=value.trim();}));
+        new Setting(c).setName("From name")
+            .addText(input=>input.setPlaceholder("Sender name")
+                .onChange(value=>{this.fromName=value.trim();}));
+        new Setting(c).setName("Reply-to email")
+            .addText(input=>input.setPlaceholder("reply@example.com")
+                .onChange(value=>{this.replyTo=value.trim();}));
+        new Setting(c).setName("I understand this creates one Campaign Draft, NOT an email send")
+            .addToggle(toggle=>toggle.setValue(false).onChange(value=>{
+                this.acknowledged=value;
+            }));
+        new Setting(c)
+            .addButton(button=>button.setButtonText("Cancel").onClick(()=>this.close()))
+            .addButton(button=>button.setButtonText("Create Campaign Draft — NOT sent")
+                .setCta().onClick(async()=>{
+                    if(this.busy)return;
+                    if(!this.acknowledged){new Notice("Confirm that this creates a Draft, not a send.");return;}
+                    this.busy=true;button.setDisabled(true);
+                    try{
+                        await this.onPromote({
+                            fromEmail:this.fromEmail,fromName:this.fromName,replyTo:this.replyTo
+                        });
+                        this.close();
+                        new Notice("Native Acelle Campaign Draft verified. NOT sent or scheduled.");
+                    }catch{
+                        new Notice("Campaign Draft promotion not verified. Use 'Recover Campaign Draft Receipt' to inspect the server. Do not create another request.");
+                    }finally{this.busy=false;button.setDisabled(false);}
+                }));
+    }
+    onClose():void{this.contentEl.empty();}
+}
+
+
+/** Server facts only. Nothing in this modal can send or schedule email. */
+class HakiSendEmailDeliveryReadinessModal extends Modal {
+    constructor(app:App,private readonly data:DeliveryReadiness){super(app);}
+    onOpen():void {
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"Email Delivery Readiness · READ ONLY"});
+        c.createEl("p",{text:"Acelle Campaign: "+this.data.campaign_uid
+            +" · Native state: "+this.data.campaign_state});
+        c.createEl("p",{text:"Sending and scheduling remain DISABLED. These checks do not grant permission to send."});
+        c.createEl("h3",{text:"Verified directly against HakiSend / Acelle"});
+        const verified=c.createEl("ul");
+        for(const [name,value] of Object.entries(this.data.checks)){
+            verified.createEl("li",{text:name.replace(/_/g," ")
+                +" — "+(value?"verified":"BLOCKED or changed")});
+        }
+        const counts=this.data.audience_status_counts;
+        c.createEl("h3",{text:"Mailing list status snapshot (counts only)"});
+        c.createEl("p",{text:"Total "+counts.total
+            +" · Subscribed "+counts.subscribed
+            +" · Unsubscribed "+counts.unsubscribed
+            +" · Blacklisted "+counts.blacklisted
+            +" · Spam reported "+counts.spam_reported
+            +" · Unconfirmed "+counts.unconfirmed
+            +" · Other "+counts.other});
+        c.createEl("p",{text:"These are status counts, NOT proof of consent or complete suppression. No subscriber addresses were retrieved."});
+        const overlap=this.data.blacklist_overlap;
+        c.createEl("h3",{text:"Acelle blacklist overlaps (counts only)"});
+        c.createEl("p",{text:"Subscribed entries: "+overlap.subscribed_total
+            +" · Owner blacklist overlap: "+overlap.owner_blacklist_overlap
+            +" · Global blacklist overlap: "+overlap.global_blacklist_overlap
+            +" · Either blacklist: "+overlap.either_blacklist_overlap
+            +" · Neither blacklist: "+overlap.without_either_blacklist_overlap});
+        c.createEl("p",{text:"Global blacklist policy is unverified. These are read-only matches, not recipient-time suppression or permission to send."});
+        const budget=this.data.budget_snapshot;
+        c.createEl("h3",{text:"Email credit and rate plan snapshot"});
+        const creditLabel=budget.credit_state==="limited_in_snapshot"
+            ? String(budget.credits_remaining_snapshot)+" credits in last DB snapshot"
+            : budget.credit_state.replace(/_/g," ");
+        c.createEl("p",{text:"Credit: "+creditLabel});
+        c.createEl("p",{text:budget.rate_limit_configured
+            ? "Plan rate cap: "+budget.rate_limit_per_window
+                +" / "+budget.rate_window_amount+" "+budget.rate_window_unit
+            : "Plan rate cap: not configured or no active plan"});
+        c.createEl("p",{text:"Live credit balance, rate-window consumption and send quota are UNVERIFIED. A snapshot does not reserve any send capacity."});
+        const provenance=this.data.consent_provenance;
+        c.createEl("h3",{text:"Signup provenance (metadata only)"});
+        c.createEl("p",{text:"Double-opt-in label: "+provenance.double_optin_label
+            +" · Single-opt-in label: "+provenance.single_optin_label
+            +" · Imported: "+provenance.imported_label
+            +" · Admin-added: "+provenance.admin_added_label
+            +" · Unknown: "+provenance.other_or_missing_label});
+        c.createEl("p",{text:"IP metadata present: "+provenance.ip_metadata_present
+            +" / "+provenance.subscribed_total
+            +". Labels and IP metadata do NOT prove marketing consent. Confirmation receipts and consent purpose remain UNVERIFIED."});
+        const receipts=this.data.consent_token_receipts;
+        c.createEl("h3",{text:"Subscriber confirmation evidence ledger"});
+        c.createEl("p",{text:receipts.state==="disabled"
+            ? "Evidence ledger: DISABLED / not installed. Receipt counts are UNKNOWN."
+            : "Candidate token redemptions: "+receipts.current_subscribed_redeemed_tokens
+                +" · Withdrawn: "+receipts.current_subscribed_withdrawn});
+        c.createEl("p",{text:"Mailbox ownership, genuine recipient confirmation delivery and marketing consent remain UNVERIFIED. No sender can approve consent from this screen."});
+        c.createEl("h3",{text:"Required evidence not yet verified"});
+        const missing=c.createEl("ul");
+        for(const [name,value] of Object.entries(this.data.compliance)){
+            missing.createEl("li",{text:name.replace(/_/g," ")+" — "+value});
+        }
+        c.createEl("p",{text:"No email was sent, scheduled or modified by this check."});
+        new Setting(c).addButton(b=>b.setButtonText("Close").onClick(()=>this.close()));
+    }
+    onClose():void{this.contentEl.empty();}
+}
+
+class HakiSendManualDraftConflictModal extends Modal {
+    private acknowledged=false;
+    private busy=false;
+    constructor(
+        app:App,
+        private readonly plan:StandalonePlan,
+        private readonly remote:PrivateDraftReadOnlyDetail,
+        private readonly acceptRevision:()=>Promise<void>
+    ){super(app);}
+    onOpen():void {
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"Private Draft conflict · read-only comparison"});
+        c.createEl("p",{text:"Local base revision "+this.plan.revision+" differs from server revision "+this.remote.revision+". Nothing has been overwritten."});
+        c.createEl("p",{text:"Local subject: "+this.plan.subject});
+        c.createEl("p",{text:"Server subject: "+this.remote.subject});
+        c.createEl("h3",{text:"Local Markdown at conflict detection"});
+        c.createEl("pre",{text:this.plan.body});
+        c.createEl("h3",{text:"HakiSend server Markdown (read-only)"});
+        c.createEl("pre",{text:this.remote.body});
+        c.createEl("p",{text:"Compare both subjects and Markdown bodies. You may merge changes in your local note. Accepting the revision only advances its CAS base and marks it UNSAVED; it never writes to HakiSend. Use a separate explicit Save after review."});
+        new Setting(c)
+            .setName("I compared both versions and deliberately chose or merged my local content")
+            .addToggle(t=>t.setValue(false).onChange(v=>{this.acknowledged=v;}));
+        new Setting(c)
+            .addButton(b=>b.setButtonText("Close without changes").onClick(()=>this.close()))
+            .addButton(b=>b.setButtonText("Accept revision for NEXT manual save").onClick(async()=>{
+                if(!this.acknowledged||this.busy){new Notice("Review both versions and acknowledge first.");return;}
+                this.busy=true;b.setDisabled(true);
+                try{
+                    await this.acceptRevision();
+                    this.close();
+                    new Notice("Only local revision metadata updated. No server write. Review the note before another manual Save.");
+                }catch{
+                    new Notice("Could not accept the remote revision; verify both versions again.");
+                }finally{this.busy=false;b.setDisabled(false);}
+            }));
+    }
+    onClose():void {this.contentEl.empty();}
+}
+
+
+/**
+ * Opt-in owner-scoped Calendar viewer. The backend candidate route is OFF by
+ * default and may return 503. The UI must never turn authoring timestamps
+ * into confirmed public visibility or Email send authorization.
+ */
+class HakiSendReadOnlyCalendarModal extends Modal {
+    private siteUid="";
+    private seq=0;
+    constructor(
+        app:App,
+        private readonly sites:readonly HakiSendSite[],
+        private readonly loadCalendar:(siteUid:string)=>Promise<ValidatedCalendarSnapshot>
+    ){super(app);}
+    onOpen():void{
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"HakiSend Unified Calendar · read-only"});
+        c.createEl("p",{text:"Calendar shows server authoring state, NOT public visibility or send permission. The backend candidate is disabled until acceptance."});
+        const view=c.createDiv();
+        new Setting(c)
+            .setName("Site")
+            .setDesc("Choose a Site, then manually refresh. No background polling.")
+            .addDropdown(d=>{
+                d.addOption("","Choose Site");
+                for(const site of this.sites)d.addOption(site.uid,site.name);
+                d.onChange(uid=>{this.siteUid=uid;this.seq++;view.empty();});
+            });
+        new Setting(c).addButton(b=>b.setButtonText("Load Calendar (GET only)")
+            .onClick(async()=>{
+                if(!this.siteUid || !this.sites.some(s=>s.uid===this.siteUid)){
+                    new Notice("Choose a Site.");return;
+                }
+                const selected=this.siteUid;
+                const seq=++this.seq;
+                view.empty();
+                view.createEl("p",{text:"Reading server Calendar..."});
+                try {
+                    const snapshot=await this.loadCalendar(selected);
+                    if(seq!==this.seq || selected!==this.siteUid)return;
+                    view.empty();
+                    const cal=snapshot.calendar;
+                    view.createEl("p",{text:"Timezone: "+cal.timezone+" · Server-confirmed records: "+cal.serverConfirmedCount+" · NOT send authorization."});
+                    if(snapshot.truncated){
+                        view.createEl("p",{text:"Partial Calendar only: backend limit reached. Other events may exist."});
+                    }
+                    for(const day of cal.days){
+                        view.createEl("h3",{text:day.localDate});
+                        const list=view.createEl("ul");
+                        for(const item of day.entries){
+                            const display=item.effectiveAtUtcMs===null
+                                ? "time not confirmed"
+                                : new Date(item.effectiveAtUtcMs).toLocaleTimeString("en-GB",{
+                                    timeZone:cal.timezone,hour:"2-digit",minute:"2-digit"
+                                });
+                            const visibility=item.kind==="post" ? " · authoring only / public visibility unverified":"";
+                            list.createEl("li",{text:display+" · "+(item.title??item.uid)+" · "+item.kind+" · "+item.status+visibility});
+                        }
+                    }
+                    view.createEl("h3",{text:"Unscheduled"});
+                    const unscheduled=view.createEl("ul");
+                    for(const item of cal.unscheduled){
+                        unscheduled.createEl("li",{text:(item.title??item.uid)+" · "+item.kind+" · "+item.status+" · no verified delivery time"});
+                    }
+                    view.createEl("h3",{text:"Blocked / unverified"});
+                    const blocked=view.createEl("ul");
+                    for(const item of cal.blocked){
+                        blocked.createEl("li",{text:(item.title??item.uid)+" · "+(item.blockedReason??"not confirmed")+" · NOT scheduled"});
+                    }
+                    if(!cal.days.length && !cal.unscheduled.length && !cal.blocked.length){
+                        view.createEl("p",{text:"No Calendar events returned for the chosen Site."});
+                    }
+                }catch{
+                    if(seq!==this.seq)return;
+                    view.empty();
+                    view.createEl("p",{text:"Server Calendar is unavailable or not yet enabled for this Site. No schedule was changed."});
+                }
+            }));
+    }
+    onClose():void{this.seq++;this.contentEl.empty();}
+}
+
+/**
+ * Opt-in Calendar v2 pages. Every GET and every Load More click is initiated
+ * by the user. No background polling, Vault writes or delivery actions.
+ * The original v1 read-only command remains available for compatibility.
+ */
+class HakiSendPagedCalendarModal extends Modal {
+    private siteUid="";
+    private seq=0;
+    private session:CalendarPageSession|null=null;
+    private view:HTMLElement|null=null;
+    constructor(
+        app:App,
+        private readonly sites:readonly HakiSendSite[],
+        private readonly fetchPage:(siteUid:string,cursor:string|null)=>Promise<unknown>,
+    ){super(app);}
+    onOpen():void{
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"HakiSend Calendar · paged read-only candidate"});
+        c.createEl("p",{text:"Each page is loaded only when requested. Publication visibility and email delivery are not attested by this view."});
+        new Setting(c).setName("Site").setDesc("Select an authorized HakiSend Site.")
+            .addDropdown(d=>{
+                d.addOption("","Choose Site");
+                for(const site of this.sites)d.addOption(site.uid,site.name);
+                d.onChange(uid=>{
+                    this.siteUid=uid;this.seq++;this.session=null;
+                    this.view?.empty();
+                });
+            });
+        new Setting(c).addButton(b=>b.setButtonText("Load first page (GET)")
+            .onClick(async()=>{await this.load(null);}));
+        new Setting(c).addButton(b=>b.setButtonText("Load More (GET)")
+            .onClick(async()=>{
+                if(!this.session?.nextCursor){
+                    new Notice("No verified next page. Choose Load first page to refresh.");
+                    return;
+                }
+                await this.load(this.session.nextCursor);
+            }));
+        this.view=c.createDiv();
+    }
+    private async load(cursor:string|null):Promise<void>{
+        if(!this.siteUid || !this.sites.some(s=>s.uid===this.siteUid)){
+            new Notice("Choose a Site.");return;
+        }
+        const selected=this.siteUid;
+        const previous=cursor===null?null:this.session;
+        if(cursor!==null && (!previous || previous.nextCursor!==cursor)){
+            new Notice("Calendar continuation no longer matches the selected Site.");
+            return;
+        }
+        const seq=++this.seq;
+        this.view?.empty();
+        this.view?.createEl("p",{text:"Reading one verified server page..."});
+        try {
+            const payload=await this.fetchPage(selected,cursor);
+            if(seq!==this.seq || selected!==this.siteUid)return;
+            const timezone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";
+            const accepted=acceptCalendarPage(payload,selected,timezone,previous);
+            this.session=accepted;
+            this.render();
+        }catch{
+            if(seq!==this.seq || selected!==this.siteUid)return;
+            this.view?.empty();
+            this.view?.createEl("p",{text:"Calendar page unavailable or unsafe. Previously verified pages remain in memory; nothing was changed on HakiSend."});
+        }
+    }
+    private render():void{
+        const view=this.view;if(!view || !this.session)return;
+        view.empty();
+        const session=this.session;
+        view.createEl("p",{text:
+            "Pages loaded: "+session.pages.length+" · Records: "+
+            session.seenIdentities.length+" · READ ONLY · No email send authorization."
+        });
+        if(session.nextCursor!==null){
+            view.createEl("p",{text:"More Calendar events may exist. Click Load More to request the next verified page."});
+        }else{
+            view.createEl("p",{text:"No further events in this bounded server traversal. Existing records may change; refresh to begin again."});
+        }
+        for(let index=0;index<session.pages.length;index++){
+            const calendar=session.pages[index].calendar;
+            view.createEl("h3",{text:"Page "+(index+1)+" · "+calendar.timezone});
+            for(const day of calendar.days){
+                view.createEl("p",{text:day.localDate+" · authoring schedule only"});
+                const ul=view.createEl("ul");
+                for(const event of day.entries){
+                    ul.createEl("li",{text:(event.title??event.uid)+" · "+
+                        event.kind+" · "+event.status+" · Public/send state unverified"});
+                }
+            }
+            const unscheduled=view.createEl("ul");
+            for(const event of calendar.unscheduled){
+                unscheduled.createEl("li",{text:(event.title??event.uid)+" · "+
+                    event.kind+" · "+event.status+" · No confirmed delivery clock"});
+            }
+            for(const event of calendar.blocked){
+                unscheduled.createEl("li",{text:(event.title??event.uid)+" · "+
+                    (event.blockedReason??"unverified")+" · NOT scheduled"});
+            }
+        }
+    }
+    onClose():void{
+        this.seq++;this.session=null;this.view=null;this.contentEl.empty();
+    }
+}
+
 export default class HakiSendPublisherPlugin
     extends Plugin
 {
@@ -1595,6 +2332,18 @@ export default class HakiSendPublisherPlugin
             name: "HakiSend: Connect account",
             callback: async () => {
                 await this.startBrowserConnect();
+            },
+        });
+
+        this.addCommand({
+            id: "reconnect-email-draft-access",
+            name: "HakiSend: Reconnect with Email Draft Access (NOT send)",
+            callback: async () => {
+                if (!this.hasSecureConnection()) {
+                    new Notice("Connect a secure HakiSend Publishing account first.");
+                    return;
+                }
+                await this.startBrowserConnect(true);
             },
         });
 
@@ -1645,6 +2394,139 @@ export default class HakiSendPublisherPlugin
         });
 
         this.addCommand({
+            id: "email-create-local-plan",
+            name: "HakiSend: Create Email Plan (local-only)",
+            callback:()=>new HakiSendLocalEmailPlannerModal(
+                this.app,this.settings.sites,this.settings.defaultSiteUid
+            ).open(),
+        });
+        this.addCommand({
+            id: "email-browse-local-plans",
+            name: "HakiSend: Browse Local Email Plans (Vault only)",
+            callback:()=>new HakiSendLocalEmailPlanBrowserModal(this.app).open(),
+        });
+        this.addRibbonIcon("mail-plus","HakiSend — Local Email Plan",()=>{
+            new HakiSendLocalEmailPlannerModal(
+                this.app,this.settings.sites,this.settings.defaultSiteUid
+            ).open();
+        });
+
+        this.addCommand({
+            id: "save-standalone-email-private-draft",
+            name: "HakiSend: Save Standalone Email as Private Draft (NOT sent)",
+            callback: async () => {
+                await this.openManualPrivateDraftSave();
+            },
+        });
+
+        this.addCommand({
+            id: "promote-private-email-to-acelle-draft",
+            name: "HakiSend: Create Acelle Campaign from Private Draft (NOT sent)",
+            callback:async()=>{await this.openManualPrivateDraftPromotion();},
+        });
+        this.addCommand({
+            id: "recover-acelle-campaign-draft-receipt",
+            name: "HakiSend: Recover Campaign Draft Receipt (read-only lookup)",
+            callback:async()=>{await this.recoverManualPrivatePromotion();},
+        });
+
+        this.addCommand({
+            id: "inspect-email-delivery-readiness",
+            name: "HakiSend: Check Acelle Email Delivery Readiness (read-only)",
+            callback:async()=>{await this.openManualDeliveryReadiness();},
+        });
+
+        this.addCommand({
+            id: "inspect-native-email-delivery-evidence-readonly",
+            name: "HakiSend: Inspect Acelle Send/Bounce Evidence (GET only)",
+            callback:async()=>{await this.inspectNativeDeliveryEvidenceReadOnly();},
+        });
+
+        this.addCommand({
+            id: "inspect-native-email-schedule-readonly",
+            name: "HakiSend: Inspect Native Acelle Email Schedule (GET only)",
+            callback:async()=>{await this.inspectNativeEmailScheduleReadOnly();},
+        });
+
+        this.addCommand({
+            id: "view-unified-calendar-readonly",
+            name: "HakiSend: View Unified Calendar (read-only candidate)",
+            callback: () => {
+                new HakiSendReadOnlyCalendarModal(
+                    this.app,this.settings.sites,async siteUid=>{
+                        const token=await this.getAccessToken();
+                        if(!token || !this.hasSecureConnection())throw Error("OAuth required.");
+                        const request=buildCalendarReadRequest(
+                            normalizeBaseUrl(this.settings.apiBaseUrl),siteUid,token,50
+                        );
+                        const response=await requestUrl({...request,throw:false});
+                        if(response.status!==200)throw Error("Calendar read unavailable.");
+                        const tz=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";
+                        return validateHakiSendCalendar(response.json,siteUid,tz);
+                    }
+                ).open();
+            },
+        });
+
+        this.addCommand({
+            id: "view-unified-calendar-paged-readonly",
+            name: "HakiSend: View Paged Calendar v2 (read-only candidate)",
+            callback: () => {
+                new HakiSendPagedCalendarModal(
+                    this.app,this.settings.sites,async (siteUid,cursor)=>{
+                        const token=await this.getAccessToken();
+                        if(!token || !this.hasSecureConnection())throw Error("OAuth required.");
+                        const request=buildCalendarPageRequest(
+                            normalizeBaseUrl(this.settings.apiBaseUrl),siteUid,
+                            token,50,cursor
+                        );
+                        const response=await requestUrl({...request,throw:false});
+                        if(response.status!==200)throw Error("Calendar page unavailable.");
+                        return response.json;
+                    }
+                ).open();
+            },
+        });
+
+        this.addCommand({
+            id: "browse-private-email-drafts",
+            name: "HakiSend: Browse Private Email Drafts (read-only)",
+            callback: () => {
+                new HakiSendPrivateEmailBrowserModal(
+                    this.app,
+                    this.settings.sites,
+                    async siteUid => {
+                        // The Site was explicitly selected; no background pull or write.
+                        const token = await this.getAccessToken();
+                        if (!token) throw Error("Connection required.");
+                        const data = await requestPrivateDraft<unknown>(
+                            request => requestUrl(request),
+                            normalizeBaseUrl(this.settings.apiBaseUrl),
+                            siteUid,
+                            token,
+                            "drafts",
+                            "GET"
+                        );
+                        return parsePrivateDraftList(data);
+                    },
+                    async (siteUid, draftUid) => {
+                        const token = await this.getAccessToken();
+                        if (!token) throw Error("Connection required.");
+                        const data = await requestPrivateDraft<unknown>(
+                            request => requestUrl(request),
+                            normalizeBaseUrl(this.settings.apiBaseUrl),
+                            siteUid,
+                            token,
+                            "drafts/" + draftUid,
+                            "GET"
+                        );
+                        return parsePrivateDraftDetail(data, draftUid);
+                    }
+                ).open();
+            },
+        });
+
+        this.addCommand({
             id: "show-local-status",
             name: "HakiSend: Show Local Status",
             callback: async () => {
@@ -1659,6 +2541,390 @@ export default class HakiSendPublisherPlugin
             );
 
         this.addSettingTab(this.settingTab);
+    }
+
+
+    private async openManualPrivateDraftSave():Promise<void> {
+        try {
+            const file=this.app.workspace.getActiveFile();
+            if(!file || file.extension!=="md") throw Error("Open a Standalone Email Plan.");
+            const fields={
+                ...(this.app.metadataCache.getFileCache(file)?.frontmatter ?? {})
+            } as Record<string,unknown>;
+            const originalRaw=await this.app.vault.read(file);
+            const plan=parseStandalonePlan(file,fields,originalRaw);
+            if(!this.settings.sites.some(s=>s.uid===plan.siteUid)) {
+                throw Error("Email Site is not in the connected account's Site list.");
+            }
+            const token=await this.getAccessToken();
+            if(!token || !this.hasSecureConnection()) throw Error("Secure OAuth Email connection required.");
+            const apiOrigin=normalizeBaseUrl(this.settings.apiBaseUrl);
+            const requester=(suffix:string,method:"GET"|"POST"|"PUT"="GET",payload?:Record<string,unknown>)=>
+                requestPrivateDraft<unknown>(
+                    req=>requestUrl(req),apiOrigin,plan.siteUid,token,suffix,method,payload
+                );
+            const rawAudiences=await requester("audiences");
+            if(!Array.isArray(rawAudiences) || rawAudiences.length>500
+                || !rawAudiences.every(isAudience)) {
+                throw Error("Cannot verify available Email audiences.");
+            }
+            const audiences:Audience[]=rawAudiences;
+            new HakiSendManualDraftSaveModal(this.app,plan,audiences,async chosenListUid=>{
+                // Explicit user selection, fresh current-note check immediately
+                // before the first possible remote write.
+                if(await this.app.vault.read(file)!==originalRaw) {
+                    throw Error("Local note changed since the save confirmation opened.");
+                }
+                const newUid=plan.requestUid||uuidV4();
+                try {
+                    await explicitlySavePrivateDraft({
+                        plan,authorizedAudiences:audiences,
+                        selectedAudienceUid:chosenListUid,
+                        newRequestUid:newUid,
+                        io:{
+                            persistCreateIdentity:async (requestUid,audienceUid)=>{
+                                await this.app.fileManager.processFrontMatter(file,fm=>{
+                                    if(fm.site_uid!==plan.siteUid ||
+                                        fm.email_subject!==plan.subject ||
+                                        (fm.email_preheader??"")!==plan.preheader ||
+                                        !!fm.hakisend_remote_email_draft_uid ||
+                                        (fm.hakisend_remote_email_request_uid &&
+                                         fm.hakisend_remote_email_request_uid!==requestUid) ||
+                                        (fm.email_list_uid && fm.email_list_uid!==audienceUid)) {
+                                        throw Error("Local Email identity changed.");
+                                    }
+                                    fm.hakisend_remote_email_request_uid=requestUid;
+                                    fm.email_list_uid=audienceUid;
+                                });
+                            },
+                            getRemoteDraft:uid=>requester("drafts/"+uid),
+                            mutateRemote:m=>requester(m.suffix,m.method,m.payload),
+                            persistVerifiedReceipt:async verified=>{
+                                const currentRaw=await this.app.vault.read(file);
+                                if(extractStandaloneEmailBody(currentRaw)!==plan.body) {
+                                    throw Error("Local note body changed; server must be reviewed manually.");
+                                }
+                                await this.app.fileManager.processFrontMatter(file,fm=>{
+                                    if(fm.site_uid!==plan.siteUid ||
+                                        fm.email_subject!==plan.subject ||
+                                        (fm.email_preheader??"")!==plan.preheader ||
+                                        fm.email_list_uid!==chosenListUid ||
+                                        (plan.draftUid
+                                            ? fm.hakisend_remote_email_draft_uid!==plan.draftUid ||
+                                              fm.hakisend_remote_email_revision!==plan.revision
+                                            : fm.hakisend_remote_email_request_uid!==newUid ||
+                                              !!fm.hakisend_remote_email_draft_uid)) {
+                                        throw Error("Local Email metadata changed during HTTP save.");
+                                    }
+                                    fm.hakisend_remote_email_draft_uid=verified.uid;
+                                    fm.hakisend_remote_email_revision=verified.revision;
+                                    fm.hakisend_remote_email_status="private_draft";
+                                });
+                                await this.app.vault.process(file,raw=>{
+                                    if(extractStandaloneEmailBody(raw)!==plan.body) {
+                                        throw Error("Local Markdown changed while updating verified callout.");
+                                    }
+                                    return decorateLocalPlan(raw,verified.revision);
+                                });
+                            }
+                        }
+                    });
+                }catch(error){
+                    if(isRevisionConflict(error) && !!plan.draftUid) {
+                        let remote:PrivateDraftReadOnlyDetail;
+                        try {
+                            remote=parsePrivateDraftDetail(
+                                await requester("drafts/"+plan.draftUid),plan.draftUid
+                            );
+                        }catch{throw error;}
+                        new HakiSendManualDraftConflictModal(this.app,plan,remote,async()=>{
+                            const fresh=parsePrivateDraftDetail(
+                                await requester("drafts/"+plan.draftUid),plan.draftUid
+                            );
+                            const acceptedRevision=verifyManualConflictAdoption(
+                                plan,remote,fresh
+                            );
+                            // The owner may have manually merged either body
+                            // while this read-only comparison was open. Never
+                            // silently choose a winning Markdown body.
+                            const currentRaw=await this.app.vault.read(file);
+                            extractStandaloneEmailBody(currentRaw);
+                            await this.app.vault.process(file,raw=>{
+                                if(raw!==currentRaw){
+                                    throw Error("Local Markdown changed during conflict adoption.");
+                                }
+                                return markManualConflictPending(raw,acceptedRevision);
+                            });
+                            await this.app.fileManager.processFrontMatter(file,fm=>{
+                                if(fm.site_uid!==plan.siteUid ||
+                                    fm.hakisend_remote_email_draft_uid!==plan.draftUid ||
+                                    fm.hakisend_remote_email_revision!==plan.revision ||
+                                    fm.hakisend_remote_email_status!=="private_draft" ||
+                                    fm.email_list_uid!==chosenListUid) {
+                                    throw Error("Local Draft identity changed.");
+                                }
+                                fm.hakisend_remote_email_revision=acceptedRevision;
+                                fm.hakisend_remote_email_status="conflict_reviewed";
+                                // Not saved or promoted. A separate manual
+                                // Save with CAS and readback remains required.
+                            });
+                        }).open();
+                    }
+                    throw error;
+                }
+            }).open();
+        }catch{
+            new Notice("Standalone Private Draft unavailable. Open a valid Email Plan and verify your secure connection and Site permissions.");
+        }
+    }
+
+
+    /**
+     * Manual, no-write Acelle schedule diagnostic for an already promoted
+     * Standalone Email Plan. This is NOT a permission to schedule or send,
+     * nor provider/queue receipt verification. The remote feature is OFF.
+     */
+
+    /**
+     * User-invoked, read-only Acelle per-message summary. A logged "sent"
+     * status is NOT provider/inbox delivery. Do not expose recipients,
+     * message IDs, or use this to auto-update local send status.
+     */
+    private async inspectNativeDeliveryEvidenceReadOnly():Promise<void>{
+        try {
+            const file=this.app.workspace.getActiveFile();
+            if(!file || file.extension!=="md")
+                throw Error("Open a Standalone Email Plan.");
+            const fm=this.app.metadataCache.getFileCache(file)?.frontmatter;
+            if(!fm || fm.hakisend_type!=="email_campaign" ||
+                fm.hakisend_email_kind!=="standalone")
+                throw Error("A saved Standalone Email Plan is required.");
+            const siteUid=fm.site_uid;
+            const campaignUid=fm.hakisend_acelle_campaign_uid;
+            if(typeof siteUid!=="string" ||
+                typeof campaignUid!=="string" ||
+                !this.settings.sites.some(s=>s.uid===siteUid))
+                throw Error("Plan is missing owned Site or verified Acelle Campaign UID.");
+            const token=await this.getAccessToken();
+            if(!token || !this.hasSecureConnection())
+                throw Error("Secure OAuth Email read access required.");
+            const request=buildNativeDeliveryEvidenceGet(
+                normalizeBaseUrl(this.settings.apiBaseUrl),siteUid,campaignUid,token
+            );
+            const response=await requestUrl(request);
+            if(response.status!==200)
+                throw Error("HakiSend has not enabled this read-only diagnostic.");
+            const evidence=parseNativeDeliveryEvidence(
+                response.json,siteUid,campaignUid
+            );
+            const modal=new Modal(this.app);
+            modal.titleEl.setText("Acelle send evidence · read-only");
+            modal.contentEl.createEl("p",{text:"Campaign: "+evidence.campaignUid+
+                " · Site: "+evidence.siteUid});
+            modal.contentEl.createEl("p",{text:"Acelle native status: "+
+                evidence.campaignNativeStatus+" · Internal ledger: "+
+                evidence.ledgerStatus+" (revision "+evidence.ledgerRevision+")"});
+            modal.contentEl.createEl("p",{text:"Acelle recorded sent: "+
+                evidence.acelleRecordedSent+" · failed: "+
+                evidence.acelleRecordedFailed+" · duplicates: "+
+                evidence.acelleRecordedDuplicate});
+            modal.contentEl.createEl("p",{text:"Tracked with bounce: "+
+                evidence.trackedWithBounce+" · complaint: "+
+                evidence.trackedWithComplaint});
+            if(evidence.unexpectedNativeActivity) {
+                modal.contentEl.createEl("p",{text:"WARNING: Acelle has message logs while HakiSend's ledger is unhanded or cancelled. Manual reconciliation required."});
+            }
+            modal.contentEl.createEl("p",{text:evidence.disclosure});
+            modal.contentEl.createEl("p",{text:"No subscribers, messages, Campaign status, schedule or provider records were changed."});
+            modal.open();
+        }catch{
+            new Notice("Acelle send evidence unavailable, not authorized, or the server feature is still OFF. No email action taken.");
+        }
+    }
+
+    private async inspectNativeEmailScheduleReadOnly():Promise<void>{
+        try{
+            const file=this.app.workspace.getActiveFile();
+            if(!file || file.extension!=="md")
+                throw Error("Open an existing Standalone Email Plan.");
+            const fm=this.app.metadataCache.getFileCache(file)?.frontmatter;
+            if(!fm || fm.hakisend_type!=="email_campaign" ||
+                fm.hakisend_email_kind!=="standalone")
+                throw Error("Choose a Standalone Email Plan.");
+            const siteUid=fm.site_uid;
+            const campaignUid=fm.hakisend_acelle_campaign_uid;
+            if(typeof siteUid!=="string" ||
+                typeof campaignUid!=="string" ||
+                !this.settings.sites.some(s=>s.uid===siteUid))
+                throw Error("This Plan has no owned Site or verified Acelle Campaign draft.");
+            const token=await this.getAccessToken();
+            if(!token || !this.hasSecureConnection())
+                throw Error("Secure OAuth Email connection required.");
+            const request=buildNativeScheduleDiagnosticRequest(
+                normalizeBaseUrl(this.settings.apiBaseUrl),siteUid,campaignUid,token
+            );
+            const response=await requestUrl(request);
+            if(response.status!==200)
+                throw Error("The server native schedule diagnostic is not enabled or access was denied.");
+            const detail=parseNativeScheduleDiagnostic(
+                response.json,siteUid,campaignUid
+            );
+            const modal=new Modal(this.app);
+            modal.titleEl.setText("Native Acelle Email Schedule — read-only");
+            modal.contentEl.createEl("p",{text:"Site: "+detail.siteUid+
+                " · Campaign: "+detail.campaignUid});
+            modal.contentEl.createEl("p",{text:"Native state: "+detail.status});
+            modal.contentEl.createEl("p",{text:detail.message});
+            modal.contentEl.createEl("p",{text:"Ledger revision: "+
+                (detail.ledgerRevision===null?"none":String(detail.ledgerRevision))});
+            modal.contentEl.createEl("p",{text:"No verified provider receipt, schedule or send authorization. Nothing changed."});
+            modal.open();
+        }catch{
+            new Notice("Native Email schedule read unavailable, unauthorized, or still disabled on HakiSend. Nothing was sent or scheduled.");
+        }
+    }
+
+    private async promotionContext():Promise<{
+        file:TFile;raw:string;plan:StandalonePlan;fields:Record<string,unknown>;
+        token:string;origin:string;
+    }> {
+        const file=this.app.workspace.getActiveFile();
+        if(!file||file.extension!=="md")throw Error("Open a saved Standalone Email Plan.");
+        const raw=await this.app.vault.read(file);
+        const fields={...(this.app.metadataCache.getFileCache(file)?.frontmatter??{})} as Record<string,unknown>;
+        const plan=parseStandalonePlan(file,fields,raw);
+        if(!plan.draftUid||!plan.revision||
+           fields.hakisend_remote_email_status!=="private_draft") {
+            throw Error("Save and verify your remote Private Draft first.");
+        }
+        if(!this.settings.sites.some(site=>site.uid===plan.siteUid)){
+            throw Error("The selected Site is not connected to this account.");
+        }
+        const token=await this.getAccessToken();
+        if(!token||!this.hasSecureConnection())throw Error("Secure OAuth required.");
+        return {file,raw,plan,fields,token,
+            origin:normalizeBaseUrl(this.settings.apiBaseUrl)};
+    }
+
+    private async persistPromotionReceipt(
+        file:TFile,plan:StandalonePlan,requestUid:string,receipt:PromotionReceipt
+    ):Promise<void> {
+        const raw=await this.app.vault.read(file);
+        if(extractStandaloneEmailBody(raw)!==plan.body){
+            throw Error("Local Markdown changed; server Campaign may exist. No overwrite.");
+        }
+        await this.app.fileManager.processFrontMatter(file,fm=>{
+            if(fm.site_uid!==plan.siteUid ||
+               fm.hakisend_remote_email_draft_uid!==plan.draftUid ||
+               fm.hakisend_remote_email_revision!==plan.revision ||
+               fm.hakisend_remote_email_status!=="private_draft" ||
+               fm.email_subject!==plan.subject ||
+               (fm.email_preheader??"")!==plan.preheader ||
+               fm.hakisend_acelle_promotion_request_uid!==requestUid ||
+               (fm.hakisend_acelle_campaign_uid &&
+                fm.hakisend_acelle_campaign_uid!==receipt.campaign_uid)) {
+                throw Error("Local source metadata changed after promotion.");
+            }
+            fm.hakisend_acelle_campaign_uid=receipt.campaign_uid;
+            fm.hakisend_acelle_campaign_status="new_draft_not_sent";
+        });
+    }
+
+    private async openManualPrivateDraftPromotion():Promise<void> {
+        try{
+            const context=await this.promotionContext();
+            const {file,raw,plan,fields,token,origin}=context;
+            if(fields.hakisend_acelle_promotion_request_uid||
+               fields.hakisend_acelle_campaign_uid) {
+                throw Error("Existing promotion request: use receipt recovery, never another POST.");
+            }
+            new HakiSendManualPromotionModal(this.app,plan,async sender=>{
+                if(await this.app.vault.read(file)!==raw) {
+                    throw Error("Local note changed while confirmation was open.");
+                }
+                const uid=uuidV4(); // stable local identity BEFORE any HTTP POST
+                await explicitlyPromotePrivateDraft(plan,uid,sender,{
+                    getSourceDraft:draftUid=>requestPrivateDraft<unknown>(
+                        req=>requestUrl(req),origin,plan.siteUid,token,
+                        "drafts/"+draftUid,"GET"
+                    ),
+                    persistRequestUid:async requestUid=>{
+                        // The server-source GET may have taken time. A local edit
+                        // during that read must abort before any remote POST.
+                        if(await this.app.vault.read(file)!==raw){
+                            throw Error("Local note changed during remote Draft verification.");
+                        }
+                        await this.app.fileManager.processFrontMatter(file,fm=>{
+                            if(fm.site_uid!==plan.siteUid ||
+                               fm.hakisend_remote_email_draft_uid!==plan.draftUid ||
+                               fm.hakisend_remote_email_revision!==plan.revision ||
+                               fm.hakisend_remote_email_status!=="private_draft" ||
+                               fm.email_subject!==plan.subject ||
+                               (fm.email_preheader??"")!==plan.preheader ||
+                               fm.hakisend_acelle_promotion_request_uid ||
+                               fm.hakisend_acelle_campaign_uid) {
+                                throw Error("Promotion identity or source changed locally.");
+                            }
+                            fm.hakisend_acelle_promotion_request_uid=requestUid;
+                        });
+                    },
+                    submit:(requestUid,revision,from)=>requestPromotion(
+                        req=>requestUrl(req),origin,plan.siteUid,plan.draftUid,
+                        requestUid,token,"POST",revision,from
+                    ),
+                    getReceipt:requestUid=>requestPromotion(
+                        req=>requestUrl(req),origin,plan.siteUid,plan.draftUid,
+                        requestUid,token,"GET"
+                    ),
+                    persistVerifiedReceipt:result=>this.persistPromotionReceipt(
+                        file,plan,uid,result
+                    ),
+                });
+            }).open();
+        }catch{
+            new Notice("Promotion unavailable: use a verified Standalone Private Draft with no existing promotion request. No Campaign was created by this command.");
+        }
+    }
+
+    private async recoverManualPrivatePromotion():Promise<void> {
+        try{
+            const {file,plan,fields,token,origin}=await this.promotionContext();
+            const requestUid=fields.hakisend_acelle_promotion_request_uid;
+            if(typeof requestUid!=="string"||!requestUid){
+                throw Error("No saved promotion request identity. Do not guess a new one.");
+            }
+            await explicitlyRecoverPrivatePromotion(plan,requestUid,{
+                getReceipt:uid=>requestPromotion(
+                    req=>requestUrl(req),origin,plan.siteUid,plan.draftUid,
+                    uid,token,"GET"
+                ),
+                persistVerifiedReceipt:result=>this.persistPromotionReceipt(
+                    file,plan,requestUid,result
+                ),
+            });
+            new Notice("Campaign Draft receipt verified on HakiSend. NOT sent or scheduled.");
+        }catch{
+            new Notice("No verified unsent Campaign receipt available. Nothing was sent or changed remotely; check HakiSend before taking another action.");
+        }
+    }
+
+    private async openManualDeliveryReadiness():Promise<void> {
+        try {
+            const {plan,fields,origin,token}=await this.promotionContext();
+            const requestUid=fields.hakisend_acelle_promotion_request_uid;
+            const campaignUid=fields.hakisend_acelle_campaign_uid;
+            if(typeof requestUid!=="string"||typeof campaignUid!=="string"||
+               fields.hakisend_acelle_campaign_status!=="new_draft_not_sent") {
+                throw Error("First create and verify the native Acelle Campaign Draft.");
+            }
+            const readiness=await explicitlyReadDeliveryReadiness(
+                req=>requestUrl(req),origin,plan.siteUid,plan.draftUid,
+                requestUid,campaignUid,token
+            );
+            new HakiSendEmailDeliveryReadinessModal(this.app,readiness).open();
+        }catch {
+            new Notice("Email readiness cannot be verified. The server feature may be OFF, the Draft changed, or access was revoked. Nothing was sent.");
+        }
     }
 
     private async loadSettings(): Promise<void> {
@@ -1747,18 +3013,15 @@ export default class HakiSendPublisherPlugin
             ?.trim();
     }
 
-    async startBrowserConnect(): Promise<void> {
+    async startBrowserConnect(requestEmailAccess = false): Promise<void> {
         try {
             const apiBaseUrl =
                 normalizeBaseUrl(
                     this.settings.apiBaseUrl
                 );
 
-            this.settings.apiBaseUrl =
-                apiBaseUrl;
-
-            await this.saveSettings();
-
+            // Reconnect must not change saved settings or previous credentials
+            // until the new OAuth exchange AND owner-scoped Site GET are verified.
             const state =
                 randomBase64Url(32);
 
@@ -1776,6 +3039,7 @@ export default class HakiSendPublisherPlugin
                     verifier,
                     apiBaseUrl,
                     createdAt: Date.now(),
+                    emailAccessRequested: requestEmailAccess === true,
                 };
 
             this.app.secretStorage.setSecret(
@@ -1802,6 +3066,9 @@ export default class HakiSendPublisherPlugin
                 "code_challenge_method",
                 "S256"
             );
+            if (requestEmailAccess === true) {
+                url.searchParams.set("email_access_requested", "read_compose");
+            }
 
             const opened = window.open(
                 url.toString(),
@@ -1973,30 +3240,62 @@ export default class HakiSendPublisherPlugin
                 );
             }
 
-            this.app.secretStorage.setSecret(
-                ACCESS_TOKEN_SECRET,
-                token
+            // Compare ONLY exact scopes from the trusted server response.
+            // Any missing or unexpectedly privileged scope preserves the
+            // previous bearer and Site configuration.
+            const emailReconnect = pending.emailAccessRequested === true;
+            const evidence = verifyConnectScopes(
+                payload.data?.scopes,emailReconnect
             );
+            if (!evidence.ok) {
+                this.clearPendingConnection();
+                throw Error(evidence.reason);
+            }
+            if (emailReconnect) {
+                const probe = await requestUrl({
+                    url: pending.apiBaseUrl + "/api/v1/hakisend/sites",
+                    method: "GET",
+                    headers: {
+                        "Accept": "application/json",
+                        "Authorization": `Bearer ${token}`,
+                    },
+                    throw: false,
+                });
+                if (!verifyEmailReconnectSitesProbe(probe.status,probe.json)) {
+                    this.clearPendingConnection();
+                    throw Error("New Email-capable token could not read HakiSend Sites. Previous connection preserved.");
+                }
+            }
 
-            /**
-             * Browser-connect is now authoritative.
-             * Remove the old plain bearer from data.json.
-             */
-            this.settings.bearerToken =
-                "";
-
-            this.settings.apiBaseUrl =
-                pending.apiBaseUrl;
-
-            await this.saveSettings();
-
+            const previousToken = this.app.secretStorage.getSecret(
+                ACCESS_TOKEN_SECRET
+            );
+            const previousSettings = JSON.parse(
+                JSON.stringify(this.settings)
+            ) as HakiSendPublisherSettings;
+            try {
+                this.app.secretStorage.setSecret(ACCESS_TOKEN_SECRET,token);
+                this.settings.bearerToken = "";
+                this.settings.apiBaseUrl = pending.apiBaseUrl;
+                await this.saveSettings();
+                await this.discoverSites();
+            } catch {
+                // Discovery/persistence failure cannot strand the owner
+                // without the previously usable OAuth credential.
+                this.app.secretStorage.setSecret(
+                    ACCESS_TOKEN_SECRET,previousToken ?? ""
+                );
+                this.settings=previousSettings;
+                try {await this.saveSettings();} catch {
+                    // Preserve the old secret even if settings I/O failed.
+                }
+                this.clearPendingConnection();
+                throw Error("New HakiSend connection could not be activated; previous token restored.");
+            }
             this.clearPendingConnection();
-
-            await this.discoverSites();
-
-            new Notice(
-                "HakiSend connected successfully."
-            );
+            new Notice(emailReconnect
+                ? "HakiSend Email Draft Access connected. Sending is NOT enabled."
+                : "HakiSend connected successfully.");
 
             this.settingTab?.display();
         } catch (error) {
@@ -4863,6 +6162,17 @@ class HakiSendPublisherSettingTab
                         }
                     );
             });
+
+        if (secure) {
+            new Setting(containerEl)
+                .setName("Email Draft Access")
+                .setDesc("Request only email:read and email:compose in addition to existing publishing scopes. A declined or failed reconnection keeps your current token. This never grants email:send or email:schedule.")
+                .addButton(button=>button
+                    .setButtonText("Reconnect with Email Draft Access")
+                    .onClick(async()=>{
+                        await this.plugin.startBrowserConnect(true);
+                    }));
+        }
 
         if (secure || legacy) {
             new Setting(containerEl)
