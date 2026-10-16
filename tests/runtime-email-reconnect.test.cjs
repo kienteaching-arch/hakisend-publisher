@@ -106,6 +106,7 @@ test('compiled Publisher installs local Email planner and secure Email reconnect
  assert(p.commands.some(c=>c.id==='email-create-local-plan'));
  assert(p.commands.some(c=>c.id==='email-browse-local-plans'));
  assert(p.commands.some(c=>c.id==='reconnect-email-draft-access'));
+ assert(p.commands.some(c=>c.id==='inspect-native-email-schedule-readonly'));
  assert(!p.commands.some(c=>/^send-email$|^schedule-email$/.test(c.id)));
  assert.equal(state.http.length,0);
 });
