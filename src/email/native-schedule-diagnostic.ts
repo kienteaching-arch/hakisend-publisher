@@ -66,9 +66,10 @@ export function parseNativeScheduleDiagnostic(
     d.calendar_scheduled_at_utc!==null ||
     typeof d.native_schedule_present!=='boolean' ||
     typeof d.native_state_inconsistent!=='boolean' ||
-    !['boolean'].includes(typeof d.has_ledger_intent) ||
+    typeof d.has_ledger_intent!=='boolean' ||
     !(d.ledger_revision===null ||
-      (Number.isSafeInteger(d.ledger_revision) && (d.ledger_revision as number)>0)) ||
+      (typeof d.ledger_revision==='number' &&
+       Number.isSafeInteger(d.ledger_revision) && d.ledger_revision>0)) ||
     !(d.ledger_status===null || typeof d.ledger_status==='string')
   )throw Error('Unsafe or unverified native schedule response.');
   const message=d.status==='intent_only_unhanded'
