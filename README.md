@@ -38,6 +38,7 @@ The development branch also includes these explicit, opt-in Email authoring comm
 - HakiSend: Browse Local Email Plans (Vault only)
 - HakiSend: Save Standalone Email as Private Draft (NOT sent)
 - HakiSend: Browse Private Email Drafts (read-only)
+- HakiSend: Inspect Native Acelle Email Schedule (GET only)
 - HakiSend: Reconnect with Email Draft Access (NOT send)
 
 **Email Plan** creates a local Markdown note under `HakiSend Emails/<Site UID>/`.
@@ -51,6 +52,15 @@ The separate **Reconnect with Email Draft Access** requests exactly
 It validates the server's scope response and Site-readability BEFORE
 replacing an existing OAuth token, and restores the old token if activation
 fails. The connection does not request `email:send` or `email:schedule`.
+
+The **Inspect Native Acelle Email Schedule** command reads only the currently
+open Standalone Email Plan with its pinned `site_uid` and previously verified
+`hakisend_acelle_campaign_uid`. It sends one authenticated GET; it cannot
+schedule, cancel, send or change local Markdown. The diagnostic checks the
+native Acelle status against a Site-scoped server ledger but **never**
+confirms delivery, provider acceptance or a verified Calendar timestamp.
+The corresponding Backend route is deliberately unmounted, so the command
+will report unavailable until authorized staging integration exists.
 
 **Important:** These new features are only in development Draft PR #2.
 The maintained editable TypeScript source has not yet passed complete
