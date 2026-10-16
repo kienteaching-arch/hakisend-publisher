@@ -22,6 +22,7 @@ import {verifyManualConflictAdoption, markManualConflictPending} from "./email/m
 import {explicitlyPromotePrivateDraft, explicitlyRecoverPrivatePromotion, requestPromotion, type PromotionSender, type PromotionReceipt} from "./email/private-draft-promotion";
 import {explicitlyReadDeliveryReadiness, type DeliveryReadiness} from "./email/delivery-readiness";
 import {buildNativeScheduleDiagnosticRequest,parseNativeScheduleDiagnostic} from "./email/native-schedule-diagnostic";
+import {buildNativeDeliveryEvidenceGet,parseNativeDeliveryEvidence} from "./email/native-delivery-evidence";
 import {buildCalendarReadRequest, validateHakiSendCalendar, type ValidatedCalendarSnapshot} from "./calendar/server-calendar-contract";
 import {
     normalizeLocalEmailPlan, serializeLocalEmailPlan, localEmailPlanPaths,
@@ -2436,6 +2437,12 @@ export default class HakiSendPublisherPlugin
         });
 
         this.addCommand({
+            id: "inspect-native-email-delivery-evidence-readonly",
+            name: "HakiSend: Inspect Acelle Send/Bounce Evidence (GET only)",
+            callback:async()=>{await this.inspectNativeDeliveryEvidenceReadOnly();},
+        });
+
+        this.addCommand({
             id: "inspect-native-email-schedule-readonly",
             name: "HakiSend: Inspect Native Acelle Email Schedule (GET only)",
             callback:async()=>{await this.inspectNativeEmailScheduleReadOnly();},
@@ -2677,6 +2684,64 @@ export default class HakiSendPublisherPlugin
      * Standalone Email Plan. This is NOT a permission to schedule or send,
      * nor provider/queue receipt verification. The remote feature is OFF.
      */
+
+    /**
+     * User-invoked, read-only Acelle per-message summary. A logged "sent"
+     * status is NOT provider/inbox delivery. Do not expose recipients,
+     * message IDs, or use this to auto-update local send status.
+     */
+    private async inspectNativeDeliveryEvidenceReadOnly():Promise<void>{
+        try {
+            const file=this.app.workspace.getActiveFile();
+            if(!file || file.extension!=="md")
+                throw Error("Open a Standalone Email Plan.");
+            const fm=this.app.metadataCache.getFileCache(file)?.frontmatter;
+            if(!fm || fm.hakisend_type!=="email_campaign" ||
+                fm.hakisend_email_kind!=="standalone")
+                throw Error("A saved Standalone Email Plan is required.");
+            const siteUid=fm.site_uid;
+            const campaignUid=fm.hakisend_acelle_campaign_uid;
+            if(typeof siteUid!=="string" ||
+                typeof campaignUid!=="string" ||
+                !this.settings.sites.some(s=>s.uid===siteUid))
+                throw Error("Plan is missing owned Site or verified Acelle Campaign UID.");
+            const token=await this.getAccessToken();
+            if(!token || !this.hasSecureConnection())
+                throw Error("Secure OAuth Email read access required.");
+            const request=buildNativeDeliveryEvidenceGet(
+                normalizeBaseUrl(this.settings.apiBaseUrl),siteUid,campaignUid,token
+            );
+            const response=await requestUrl(request);
+            if(response.status!==200)
+                throw Error("HakiSend has not enabled this read-only diagnostic.");
+            const evidence=parseNativeDeliveryEvidence(
+                response.json,siteUid,campaignUid
+            );
+            const modal=new Modal(this.app);
+            modal.titleEl.setText("Acelle send evidence · read-only");
+            modal.contentEl.createEl("p",{text:"Campaign: "+evidence.campaignUid+
+                " · Site: "+evidence.siteUid});
+            modal.contentEl.createEl("p",{text:"Acelle native status: "+
+                evidence.campaignNativeStatus+" · Internal ledger: "+
+                evidence.ledgerStatus+" (revision "+evidence.ledgerRevision+")"});
+            modal.contentEl.createEl("p",{text:"Acelle recorded sent: "+
+                evidence.acelleRecordedSent+" · failed: "+
+                evidence.acelleRecordedFailed+" · duplicates: "+
+                evidence.acelleRecordedDuplicate});
+            modal.contentEl.createEl("p",{text:"Tracked with bounce: "+
+                evidence.trackedWithBounce+" · complaint: "+
+                evidence.trackedWithComplaint});
+            if(evidence.unexpectedNativeActivity) {
+                modal.contentEl.createEl("p",{text:"WARNING: Acelle has message logs while HakiSend's ledger is unhanded or cancelled. Manual reconciliation required."});
+            }
+            modal.contentEl.createEl("p",{text:evidence.disclosure});
+            modal.contentEl.createEl("p",{text:"No subscribers, messages, Campaign status, schedule or provider records were changed."});
+            modal.open();
+        }catch{
+            new Notice("Acelle send evidence unavailable, not authorized, or the server feature is still OFF. No email action taken.");
+        }
+    }
+
     private async inspectNativeEmailScheduleReadOnly():Promise<void>{
         try{
             const file=this.app.workspace.getActiveFile();
