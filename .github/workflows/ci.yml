@@ -56,7 +56,7 @@ jobs:
           test -s "$ZIP"
           unzip -tq "$ZIP"
           test "$(unzip -Z1 "$ZIP" | wc -l)" -eq 5
-          test "$(unzip -Z1 "$ZIP" | sort)" = "$(printf '%s\\n' DEV-UAT-NOT-A-RELEASE.txt checksums.sha256 main.js manifest.json styles.css | sort)"
+          test "$(unzip -Z1 "$ZIP" | sort)" = "$(printf '%s\n' DEV-UAT-NOT-A-RELEASE.txt checksums.sha256 main.js manifest.json styles.css | sort)"
           mkdir -p /tmp/hakisend-obsidian-dev-uat-vault
           unzip -qo "$ZIP" -d /tmp/hakisend-obsidian-dev-uat-vault
           (cd /tmp/hakisend-obsidian-dev-uat-vault && sha256sum -c checksums.sha256)
