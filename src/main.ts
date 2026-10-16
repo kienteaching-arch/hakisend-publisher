@@ -21,6 +21,7 @@ import {explicitlySavePrivateDraft} from "./email/explicit-private-draft-save";
 import {verifyManualConflictAdoption, markManualConflictPending} from "./email/manual-conflict-adoption";
 import {explicitlyPromotePrivateDraft, explicitlyRecoverPrivatePromotion, requestPromotion, type PromotionSender, type PromotionReceipt} from "./email/private-draft-promotion";
 import {explicitlyReadDeliveryReadiness, type DeliveryReadiness} from "./email/delivery-readiness";
+import {buildNativeScheduleDiagnosticRequest,parseNativeScheduleDiagnostic} from "./email/native-schedule-diagnostic";
 import {buildCalendarReadRequest, validateHakiSendCalendar, type ValidatedCalendarSnapshot} from "./calendar/server-calendar-contract";
 import {
     normalizeLocalEmailPlan, serializeLocalEmailPlan, localEmailPlanPaths,
@@ -2435,6 +2436,12 @@ export default class HakiSendPublisherPlugin
         });
 
         this.addCommand({
+            id: "inspect-native-email-schedule-readonly",
+            name: "HakiSend: Inspect Native Acelle Email Schedule (GET only)",
+            callback:async()=>{await this.inspectNativeEmailScheduleReadOnly();},
+        });
+
+        this.addCommand({
             id: "view-unified-calendar-readonly",
             name: "HakiSend: View Unified Calendar (read-only candidate)",
             callback: () => {
@@ -2661,6 +2668,54 @@ export default class HakiSendPublisherPlugin
             }).open();
         }catch{
             new Notice("Standalone Private Draft unavailable. Open a valid Email Plan and verify your secure connection and Site permissions.");
+        }
+    }
+
+
+    /**
+     * Manual, no-write Acelle schedule diagnostic for an already promoted
+     * Standalone Email Plan. This is NOT a permission to schedule or send,
+     * nor provider/queue receipt verification. The remote feature is OFF.
+     */
+    private async inspectNativeEmailScheduleReadOnly():Promise<void>{
+        try{
+            const file=this.app.workspace.getActiveFile();
+            if(!file || file.extension!=="md")
+                throw Error("Open an existing Standalone Email Plan.");
+            const fm=this.app.metadataCache.getFileCache(file)?.frontmatter;
+            if(!fm || fm.hakisend_type!=="email_campaign" ||
+                fm.hakisend_email_kind!=="standalone")
+                throw Error("Choose a Standalone Email Plan.");
+            const siteUid=fm.site_uid;
+            const campaignUid=fm.hakisend_acelle_campaign_uid;
+            if(typeof siteUid!=="string" ||
+                typeof campaignUid!=="string" ||
+                !this.settings.sites.some(s=>s.uid===siteUid))
+                throw Error("This Plan has no owned Site or verified Acelle Campaign draft.");
+            const token=await this.getAccessToken();
+            if(!token || !this.hasSecureConnection())
+                throw Error("Secure OAuth Email connection required.");
+            const request=buildNativeScheduleDiagnosticRequest(
+                normalizeBaseUrl(this.settings.apiBaseUrl),siteUid,campaignUid,token
+            );
+            const response=await requestUrl(request);
+            if(response.status!==200)
+                throw Error("The server native schedule diagnostic is not enabled or access was denied.");
+            const detail=parseNativeScheduleDiagnostic(
+                response.json,siteUid,campaignUid
+            );
+            const modal=new Modal(this.app);
+            modal.titleEl.setText("Native Acelle Email Schedule — read-only");
+            modal.contentEl.createEl("p",{text:"Site: "+detail.siteUid+
+                " · Campaign: "+detail.campaignUid});
+            modal.contentEl.createEl("p",{text:"Native state: "+detail.status});
+            modal.contentEl.createEl("p",{text:detail.message});
+            modal.contentEl.createEl("p",{text:"Ledger revision: "+
+                (detail.ledgerRevision===null?"none":String(detail.ledgerRevision))});
+            modal.contentEl.createEl("p",{text:"No verified provider receipt, schedule or send authorization. Nothing changed."});
+            modal.open();
+        }catch{
+            new Notice("Native Email schedule read unavailable, unauthorized, or still disabled on HakiSend. Nothing was sent or scheduled.");
         }
     }
 
