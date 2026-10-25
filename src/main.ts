@@ -12,7 +12,8 @@ import { Modal,
 } from "obsidian";
 
 import {requestPrivateDraft} from "./email/hakisend-draft-api";
-import {createR3LocalPlan,renderR3LocalPlan,type R3Input,type R3ListTarget,type R3PageTarget,type R3Mode} from "./multichannel/r3-distribution-contract";
+import {createR3LocalPlan,renderR3LocalPlan,type R3Input,type R3ListTarget,type R3PageTarget,type R3Mode,type R3Kind} from "./multichannel/r3-distribution-contract";
+import {r3LocalCalendar,type R3LocalCalendarEntry} from "./multichannel/r3-local-calendar";
 import {fetchR3Campaigns,fetchR3Preflight,type R3Campaigns,type R3Preflight} from "./email/publisher-r3-read";
 import {sendR3Once,readR3Receipt,type R3Intent,type DeliveryAction,type R3Payload,type R3Receipt} from "./email/publisher-r3-delivery";
 import {parsePrivateDraftList, parsePrivateDraftDetail, type PrivateDraftListRow, type PrivateDraftReadOnlyDetail} from "./email/private-draft-list";
@@ -2450,8 +2451,6 @@ class HakiSendR3MultichannelPlanModal extends Modal {
     private audiences:Audience[]=[];
     private running=false;
     private siteRevision=0;
-    private readonly options:HTMLElement;
-    private readonly audiencePanel:HTMLElement;
     constructor(app:App,private readonly sites:readonly HakiSendSite[],
         defaultSite:string,
         private readonly fetchAudiences:(siteUid:string)=>Promise<Audience[]>) {
@@ -2462,8 +2461,6 @@ class HakiSendR3MultichannelPlanModal extends Modal {
         this.selectedSite=sites.some(s=>s.uid===pinned)?pinned:
             (sites.some(s=>s.uid===defaultSite)?defaultSite:(sites[0]?.uid??""));
         this.title=note?.basename??"";
-        this.options=this.contentEl.createDiv();
-        this.audiencePanel=this.contentEl.createDiv();
     }
     onOpen():void{
         const c=this.contentEl;c.empty();
@@ -2491,9 +2488,9 @@ class HakiSendR3MultichannelPlanModal extends Modal {
                 });
             });
         new Setting(c).setName("Title").addText(t=>t.setValue(this.title).onChange(v=>{this.title=v;}));
-        const options=c.createDiv();this.options.replaceWith(options);
-        // The modal may re-render; always use freshly appended panel containers.
-        const audiences=c.createDiv();this.audiencePanel.replaceWith(audiences);
+        // Fresh, local-only controls in this modal; no external action on change.
+        const options=c.createDiv();
+        const audiences=c.createDiv();
         new Setting(c).addButton(b=>b.setButtonText("Create local distribution plan").setCta().onClick(async()=>{
             if(this.running)return;
             this.running=true;b.setDisabled(true);
@@ -2606,6 +2603,83 @@ class HakiSendR3MultichannelPlanModal extends Modal {
     onClose():void{this.siteRevision++;this.contentEl.empty();}
 }
 
+
+/**
+ * Unified local-intent calendar. Read-only data from Obsidian Vault.
+ * It must NEVER be confused with HakiSend's server-confirmed Calendar.
+ */
+class HakiSendR3LocalMultichannelCalendarModal extends Modal{
+  private chosenSite="all";
+  private chosenKind:R3Kind|"all"="all";
+  private documents:{path:string;markdown:string}[]=[];
+  private panel:HTMLElement|null=null;
+  constructor(app:App,private readonly sites:readonly HakiSendSite[]){super(app);}
+  onOpen():void{
+    const root=this.contentEl;root.empty();
+    root.createEl("h2",{text:"HakiSend — Multichannel Plan Calendar (LOCAL ONLY)"});
+    root.createEl("p",{text:"This displays future INTENTS in your Vault, not confirmed HakiSend or Facebook schedules. Never treat a local draft as sent or published."});
+    new Setting(root).setName("Site").addDropdown(d=>{
+      d.addOption("all","All authorized Sites");
+      for(const site of this.sites)d.addOption(site.uid,site.name);
+      d.onChange(v=>{this.chosenSite=v;this.renderEntries();});
+    });
+    new Setting(root).setName("Content type").addDropdown(d=>{
+      for(const [value,name] of [
+        ["all","All"],
+        ["site_post","Website Post"],
+        ["post_free_email","Post Free Email"],
+        ["standalone_email","Standalone Email"],
+        ["facebook_page_post","Facebook Fanpage"]
+      ])d.addOption(value,name);
+      d.onChange(v=>{this.chosenKind=v as R3Kind|"all";this.renderEntries();});
+    });
+    new Setting(root).addButton(b=>b.setButtonText("Refresh local plans").onClick(async()=>{
+      b.setDisabled(true);
+      try{await this.loadPlans();}catch(e){
+        new Notice("Local Calendar read failed: "+String(e).slice(0,120));
+      }finally{b.setDisabled(false);}
+    }));
+    this.panel=root.createDiv();
+    void this.loadPlans().catch(e=>{
+      new Notice("Local plan read failed: "+String(e).slice(0,120));
+    });
+  }
+  private async loadPlans():Promise<void>{
+    const files=this.app.vault.getMarkdownFiles()
+      .filter(file=>file.path.startsWith("HakiSend Distribution Plans/"));
+    if(files.length>500)throw Error("Over 500 plan notes; narrow the local dataset.");
+    const data:{path:string;markdown:string}[]=[];
+    for(const file of files){
+      if(file.stat.size>1800000){
+        data.push({path:file.path,markdown:"INVALID_OVERSIZED_PLAN"});continue;
+      }
+      data.push({path:file.path,markdown:await this.app.vault.read(file)});
+    }
+    this.documents=data;this.renderEntries();
+  }
+  private renderEntries():void{
+    const root=this.panel;if(!root)return;root.empty();
+    const cal=r3LocalCalendar(this.documents,this.chosenSite,this.chosenKind);
+    root.createEl("p",{text:cal.entries.length+" local planned actions · "+
+      cal.invalidDocuments+" invalid/unsupported plans. All statuses are LOCAL DRAFT."});
+    if(!cal.entries.length){root.createEl("p",{text:"No local plans match the Site/type filter."});return;}
+    for(const e of cal.entries){
+      const site=this.sites.find(s=>s.uid===e.siteUid);
+      const source=e.planPath;
+      new Setting(root)
+        .setName(e.title)
+        .setDesc((site?.name??e.siteUid)+" · "+e.kind.replaceAll("_"," ")+" · "+
+          e.destinationLabel+" · "+(e.scheduledAtUtc??"No date set")+" · LOCAL DRAFT")
+        .addButton(b=>b.setButtonText("Open plan").onClick(async()=>{
+          const file=this.app.vault.getAbstractFileByPath(source);
+          if(!(file instanceof TFile))throw Error("Local plan no longer exists.");
+          await this.app.workspace.getLeaf(true).openFile(file);
+        }));
+    }
+  }
+  onClose():void{this.panel=null;this.documents=[];this.contentEl.empty();}
+}
+
 export default class HakiSendPublisherPlugin
     extends Plugin
 {
@@ -2709,6 +2783,14 @@ export default class HakiSendPublisherPlugin
                         throw Error("Audience authorization could not be verified.");
                     return result as Audience[];
                 }
+            ).open()
+        });
+
+        this.addCommand({
+            id:"r3-view-local-multichannel-plan-calendar",
+            name:"HakiSend: View Multichannel Plan Calendar by Site/Page/List (local-only)",
+            callback:()=>new HakiSendR3LocalMultichannelCalendarModal(
+                this.app,this.settings.sites
             ).open()
         });
         this.addCommand({

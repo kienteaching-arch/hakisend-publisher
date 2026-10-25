@@ -107,3 +107,29 @@ test('Local artifact is visibly non-executable, never claims a remote receipt',(
 test('No receiver list cannot produce a standalone send',()=>{
  assert.throws(()=>createR3LocalPlan({...only(),lists:[]},now),/Select an Email List/);
 });
+
+
+test('Facebook previews only the marked Free block, not the paid Post body',()=>{
+ const p=createR3LocalPlan({...post(),lists:[],pages:[
+   {pageId:'1234567890',pageName:'Parents Page'}
+ ]},now);
+ const fb=p.events.find(e=>e.kind==='facebook_page_post');
+ assert.equal(fb.body,'Free public text.');
+ assert(!fb.body.includes('PAID_SECRET_123'));
+});
+test('Facebook preview without explicit Free block is blocked',()=>{
+ assert.throws(()=>createR3LocalPlan({...post(),markdown:'A private post',lists:[],pages:[
+   {pageId:'1234567890',pageName:'Parents Page'}
+ ]},now),/explicit Free/);
+});
+test('Existing standalone local Email Plan uses only Email body, no instructional text',()=>{
+ const body='---\nhakisend_email_kind: "standalone"\nsite_uid: "'+site+'"\n---\n'+
+  '# Letter\n\n> Instructions\n\n## Email body\n\nComplete independent newsletter.';
+ const p=createR3LocalPlan({...only(),notePath:'HakiSend Emails/'+site+'/Email - My Plan.md',
+  markdown:body},now);
+ assert.equal(p.events[0].body,'Complete independent newsletter.');
+});
+test('A post-linked plan cannot be disguised as Standalone Email',()=>{
+ const body='---\nhakisend_email_kind: "post_linked_free"\n---\n## Email body\nPaid text';
+ assert.throws(()=>createR3LocalPlan({...only(),notePath:'HakiSend Emails/'+site+'/Post Email.md',markdown:body},now),/Standalone/);
+});

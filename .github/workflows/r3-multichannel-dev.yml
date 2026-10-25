@@ -30,6 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -Fq 'r3-create-multichannel-distribution-plan' main.js
+          grep -Fq 'r3-view-local-multichannel-plan-calendar' main.js
           grep -Fq 'email-create-local-plan' main.js
           grep -Fq 'r3-native-email-delivery' main.js
           grep -Fq 'Post Free Email requires exactly one explicit Free block' main.js

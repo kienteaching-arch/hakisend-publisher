@@ -3,6 +3,7 @@
  * Site UID is email ownership, not an implied Site Post.
  * Facebook Page never inherits HakiSend Site credentials.
  */
+import {extractStandaloneEmailBody} from '../email/private-draft-contract';
 export type R3Kind='site_post'|'post_free_email'|'standalone_email'|'facebook_page_post';
 export type R3Mode='post'|'email_only';
 export interface R3ListTarget{
@@ -33,11 +34,12 @@ function requireField(x:unknown,name:string,max=255):string{
    throw Error('Invalid '+name);
  return x.trim();
 }
-function requirePath(x:unknown):string{
+function requirePath(x:unknown,mode:R3Mode):string{
  const v=requireField(x,'editable Markdown path',1024);
  if(!v.endsWith('.md')||v.startsWith('/')||v.includes('\\')||
  v.split('/').some(p=>!p||p==='.'||p==='..')||
- v.startsWith('HakiSend Imports/')||v.startsWith('HakiSend Emails/'))
+ v.startsWith('HakiSend Imports/')||
+ (mode!=='email_only'&&v.startsWith('HakiSend Emails/')))
    throw Error('Source must be an editable Markdown note, not an imported snapshot.');
  return v;
 }
@@ -98,8 +100,15 @@ export function createR3LocalPlan(input:R3Input,now:Date=new Date()):R3Plan{
    throw Error('Invalid R3 plan or destination count.');
  const id=requireField(input.siteUid,'Site UID',36).toLowerCase();
  if(!UUID.test(id))throw Error('Invalid Site UID.');
- const note=requirePath(input.notePath);
- const body=stripR3Frontmatter(input.markdown);
+ const note=requirePath(input.notePath,input.mode);
+ let body=stripR3Frontmatter(input.markdown);
+ if(input.mode==='email_only'&&note.startsWith('HakiSend Emails/')){
+   if(!/^hakisend_email_kind:\s*["']?standalone["']?\s*$/m.test(input.markdown))
+     throw Error('Only Standalone Email Plans can be used as Email Only source.');
+   body=extractStandaloneEmailBody(input.markdown);
+   if(!body||body.includes('Write the standalone email here.'))
+     throw Error('Replace the standalone email body placeholder.');
+ }
  const title=requireField(input.title,'Post or email title',200);
  if(!body)throw Error('Empty Markdown source.');
  if(input.mode==='email_only'&&(input.postScheduledAt||input.pages.length>0))
@@ -108,7 +117,7 @@ export function createR3LocalPlan(input:R3Input,now:Date=new Date()):R3Plan{
  if(input.mode==='post')events.push({kind:'site_post',siteUid:id,destinationUid:id,
   destinationLabel:'HakiSend Site',title,body,sourceNote:note,
   scheduledAtUtc:r3UtcSchedule(input.postScheduledAt,now),status:'local_draft'});
- const free=input.mode==='post'&&input.lists.length?extractMarkedFreeBlock(input.markdown):'';
+ const free=input.mode==='post'&&(input.lists.length||input.pages.length)?extractMarkedFreeBlock(input.markdown):'';
  const lists=new Set<string>();
  for(const row of input.lists){
   const list=requireField(row.listUid,'Email List UID',191);
@@ -133,7 +142,7 @@ export function createR3LocalPlan(input:R3Input,now:Date=new Date()):R3Plan{
   pages.add(page);
   events.push({kind:'facebook_page_post',siteUid:id,destinationUid:page,
    destinationLabel:requireField(row.pageName,'Facebook Page name',160),
-   title,body,sourceNote:note,status:'local_draft',
+   title,body:free,sourceNote:note,status:'local_draft',
    scheduledAtUtc:r3UtcSchedule(row.scheduledAt,now)});
  }
  if(input.mode==='email_only'&&!events.length)throw Error('Select an Email List for Email Only.');
