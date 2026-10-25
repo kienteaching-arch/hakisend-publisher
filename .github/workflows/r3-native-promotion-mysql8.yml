@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "f9c87e4dfdf4751fa19d1fabbb1b09b0e7e579cf685a4dbe0f60a1bac49b120b  staging/r3-native-promotion/fixtures.zip" | sha256sum -c -
+          echo "abf5a11ba1382c2c704221b75a48820a380017706e5bb3a1cb92384287b85e33  staging/r3-native-promotion/fixtures.zip" | sha256sum -c -
           cd staging/r3-native-promotion
           unzip -q fixtures.zip
           php -l PrivateDraftCampaign.php
