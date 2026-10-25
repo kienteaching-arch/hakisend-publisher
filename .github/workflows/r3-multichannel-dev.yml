@@ -1,0 +1,43 @@
+name: R3 Multichannel two email types — developer UAT
+on:
+  push:
+    branches:
+      - work/r3-multichannel-two-email-kinds-20261025
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  authoring-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      NPM_CONFIG_CACHE: /tmp/hakisend-r3-multichannel-npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - name: Existing regression plus four publication channel tests
+        run: node --experimental-strip-types --test tests/*.test.mjs
+      - name: TypeScript complete plugin compile check
+        run: npx tsc --noEmit
+      - name: Build complete Obsidian plugin
+        run: npm run build
+      - name: Existing v0.1.9 owner runtime mocks
+        run: node --test tests/runtime-email-reconnect.test.cjs
+      - name: Check compiled multichannel command and previous commands remain
+        run: |
+          set -euo pipefail
+          grep -Fq 'r3-create-multichannel-distribution-plan' main.js
+          grep -Fq 'email-create-local-plan' main.js
+          grep -Fq 'r3-native-email-delivery' main.js
+          grep -Fq 'Post Free Email requires exactly one explicit Free block' main.js
+          node scripts/package-development-uat.mjs
+          unzip -tq dist/hakisend-publisher-development-uat.zip
+      - name: Upload DEV-only test Vault plugin bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hakisend-obsidian-r3-multichannel-development-uat
+          path: dist/hakisend-publisher-development-uat.zip
+          retention-days: 7
