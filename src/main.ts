@@ -12,6 +12,8 @@ import { Modal,
 } from "obsidian";
 
 import {requestPrivateDraft} from "./email/hakisend-draft-api";
+import {createEmailOnlyPlanFromMarkdown,validateEmailOnlySource} from "./email/r3-email-only-source";
+import {locateDraftForRecovery,verifyRecoveredPrivateDraft} from "./email/r3-private-draft-recovery";
 import {createR3LocalPlan,renderR3LocalPlan,type R3Input,type R3ListTarget,type R3PageTarget,type R3Mode,type R3Kind} from "./multichannel/r3-distribution-contract";
 import {r3LocalCalendar,type R3LocalCalendarEntry} from "./multichannel/r3-local-calendar";
 import {fetchR3Campaigns,fetchR3Preflight,type R3Campaigns,type R3Preflight} from "./email/publisher-r3-read";
@@ -2322,12 +2324,64 @@ class HakiSendR3NativeDeliveryModal extends Modal {
     private readonly inspect:(site:string,campaign:string)=>Promise<R3Preflight>,
     private readonly pending:(site:string,campaign:string)=>R3Intent|null,
     private readonly submit:(site:string,campaign:string,action:DeliveryAction,p:R3Payload)=>Promise<R3Receipt>,
-    private readonly recover:(intent:R3Intent)=>Promise<R3Receipt>) {super(app);}
+    private readonly recover:(intent:R3Intent)=>Promise<R3Receipt>,
+    private readonly pinned?:{site:string;campaign:string}) {super(app);}
   onOpen():void{
     const root=this.contentEl;root.empty();
     root.createEl("h2",{text:"HakiSend · Native Email Delivery (R3 development)"});
     root.createEl("p",{text:"Choose a Site, read native preflight, review recipients and approve exactly once. A lost response must be recovered by GET; never press Send again."});
     const area=root.createDiv();
+
+    if(this.pinned){
+      const {site,campaign}=this.pinned;
+      if(!this.sites.some(x=>x.uid===site)){
+        area.createEl("p",{text:"This Campaign's Site is no longer authorized."});return;
+      }
+      this.chosenSite=site;
+      root.createEl("p",{text:"PINNED: Site "+site+" · Campaign "+campaign+
+        ". You cannot select another Campaign in this Email Only workflow."});
+      new Setting(root).addButton(b=>b.setButtonText("Inspect THIS Campaign preflight").onClick(async()=>{
+        const seq=++this.seq;
+        area.empty();area.createEl("p",{text:"Reading native preflight…"});
+        try{
+          const check=await this.inspect(site,campaign);
+          if(seq!==this.seq)return;
+          area.empty();
+          const required=['site_audience','native_state','campaign_permission','native_setup',
+            'sender','unsubscribe','native_recipient_count','credit'];
+          const count=check.recipientCount;
+          if(check.siteUid!==site||check.campaign.uid!==campaign){
+            area.createEl("p",{text:"Preflight response identity mismatch. BLOCKED."});return;
+          }
+          area.createEl("p",{text:check.campaign.name+" · "+check.campaign.status+
+             " · "+String(count)+" eligible recipients"});
+          for(const [key,value] of Object.entries(check.checks)){
+            area.createEl("p",{text:key+" · "+value.state+" · "+value.detail});
+          }
+          const allowed=check.campaign.status==='new'&&count!==null&&count>0&&
+            required.every(key=>check.checks[key]?.state==='pass');
+          if(!allowed){
+            area.createEl("strong",{text:"BLOCKED by native HakiSend/Acelle preflight."});return;
+          }
+          const existing=this.pending(site,campaign);
+          if(existing){
+            area.createEl("p",{text:"Persisted Send/Schedule intent exists. GET receipt only; never retry POST."});
+            new Setting(area).addButton(b=>b.setButtonText("Recover receipt (GET only)").onClick(async()=>{
+              try{
+                const rec=await this.recover(existing);
+                new Notice("Journal "+rec.journalStatus+" · not inbox delivery proof");
+              }catch{new Notice("Uncertain outcome. Reconcile manually. DO NOT resend.");}
+            }));
+            return;
+          }
+          this.renderConfirmation(area,site,campaign,count);
+        }catch{
+          if(seq!==this.seq)return;
+          area.empty();area.createEl("p",{text:"Preflight unavailable. No email was sent."});
+        }
+      }));
+      return;
+    }
     new Setting(root).setName("HakiSend Site").addDropdown(drop=>{
       drop.addOption("","Choose Site");
       for(const site of this.sites)drop.addOption(site.uid,site.name);
@@ -2795,6 +2849,16 @@ export default class HakiSendPublisherPlugin
             ).open()
         });
         this.addCommand({
+            id:"r3-email-only-from-markdown",
+            name:"HakiSend: Email Only — Import Current Markdown and Start Workflow (R3)",
+            callback:async()=>{await this.openR3EmailOnlyImport();}
+        });
+        this.addCommand({
+            id:"r3-email-only-workflow",
+            name:"HakiSend: Email Only — Continue Draft, Acelle Campaign, Delivery (R3)",
+            callback:async()=>{await this.openR3EmailOnlyLifecycle();}
+        });
+        this.addCommand({
             id: "email-create-local-plan",
             name: "HakiSend: Create Email Plan (local-only)",
             callback:()=>new HakiSendLocalEmailPlannerModal(
@@ -2839,31 +2903,7 @@ export default class HakiSendPublisherPlugin
         this.addCommand({
             id:"r3-native-email-delivery",
             name:"HakiSend: Send Now or Schedule Email (R3 development)",
-            callback:()=>new HakiSendR3NativeDeliveryModal(
-                this.app,this.settings.sites,
-                async site=>{
-                    const token=await this.getAccessToken();
-                    if(!this.hasSecureConnection())throw Error("Secure OAuth required");
-                    return fetchR3Campaigns(req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),site,token);
-                },
-                async (site,campaign)=>{
-                    const token=await this.getAccessToken();
-                    if(!this.hasSecureConnection())throw Error("Secure OAuth required");
-                    return fetchR3Preflight(req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),site,campaign,token);
-                },
-                (site,campaign)=>this.r3PendingDelivery(site,campaign),
-                async (site,campaign,action,p)=>{
-                    const token=await this.getAccessToken();
-                    if(!this.hasSecureConnection())throw Error("Secure OAuth required");
-                    return sendR3Once(req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),
-                        site,campaign,token,action,p,intent=>this.r3PersistIntent(intent));
-                },
-                async intent=>{
-                    const token=await this.getAccessToken();
-                    if(!this.hasSecureConnection())throw Error("Secure OAuth required");
-                    return readR3Receipt(req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),intent,token);
-                }
-            ).open(),
+            callback:()=>this.createR3NativeDeliveryModal().open(),
         });
 
         // GET-only recovery is always discoverable, even after the native
@@ -3025,6 +3065,287 @@ export default class HakiSendPublisherPlugin
         this.addSettingTab(this.settingTab);
     }
 
+
+
+    /** Existing concrete native APIs; pinned delivery cannot use a different Campaign. */
+    private createR3NativeDeliveryModal(
+        pinned?:{site:string;campaign:string;notePath:string}
+    ):HakiSendR3NativeDeliveryModal{
+        return new HakiSendR3NativeDeliveryModal(
+            this.app,this.settings.sites,
+            async site=>{
+                const token=await this.getAccessToken();
+                if(!this.hasSecureConnection())throw Error("Secure OAuth required");
+                return fetchR3Campaigns(req=>requestUrl(req),
+                    normalizeBaseUrl(this.settings.apiBaseUrl),site,token);
+            },
+            async(site,campaign)=>{
+                const token=await this.getAccessToken();
+                if(!this.hasSecureConnection())throw Error("Secure OAuth required");
+                return fetchR3Preflight(req=>requestUrl(req),
+                    normalizeBaseUrl(this.settings.apiBaseUrl),site,campaign,token);
+            },
+            (site,campaign)=>this.r3PendingDelivery(site,campaign),
+            async(site,campaign,action,p)=>{
+                if(pinned){
+                    const active=this.app.workspace.getActiveFile();
+                    if(!active||active.path!==pinned.notePath||site!==pinned.site||
+                       campaign!==pinned.campaign)
+                        throw Error("The Email Only source changed. No delivery submitted.");
+                    const raw=await this.app.vault.read(active);
+                    const fm=this.app.metadataCache.getFileCache(active)?.frontmatter??{};
+                    const local=parseStandalonePlan(active,fm,raw);
+                    if(local.siteUid!==site||
+                       fm.hakisend_acelle_campaign_uid!==campaign||
+                       fm.hakisend_acelle_campaign_status!=="new_draft_not_sent"||
+                       !local.draftUid||!local.revision)
+                        throw Error("Email Campaign no longer matches verified local source.");
+                }
+                const token=await this.getAccessToken();
+                if(!this.hasSecureConnection())throw Error("Secure OAuth required");
+                return sendR3Once(req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),
+                    site,campaign,token,action,p,intent=>this.r3PersistIntent(intent));
+            },
+            async intent=>{
+                const token=await this.getAccessToken();
+                if(!this.hasSecureConnection())throw Error("Secure OAuth required");
+                return readR3Receipt(req=>requestUrl(req),
+                    normalizeBaseUrl(this.settings.apiBaseUrl),intent,token);
+            },
+            pinned?{site:pinned.site,campaign:pinned.campaign}:undefined
+        );
+    }
+
+    /**
+     * Import an independent Markdown email into the EXISTING Standalone Plan.
+     * This stage has only one Vault CREATE operation; no server mutation.
+     */
+    private async openR3EmailOnlyImport():Promise<void>{
+        const file=this.app.workspace.getActiveFile();
+        if(!file||file.extension!=="md"){
+            new Notice("Open an independent Markdown email note.");return;
+        }
+        const original=await this.app.vault.read(file);
+        try{validateEmailOnlySource(original,file.path);}
+        catch(e){new Notice("Email Only blocked: "+String(e).slice(0,150));return;}
+        const sites=this.settings.sites;
+        if(!sites.length){new Notice("Connect at least one HakiSend Site.");return;}
+        const sourceFields=this.app.metadataCache.getFileCache(file)?.frontmatter??{};
+        const pinned=typeof sourceFields.site_uid==='string'?sourceFields.site_uid:"";
+        const defaultSite=sites.some(s=>s.uid===pinned)?pinned:
+            (sites.some(s=>s.uid===this.settings.defaultSiteUid)
+                ?this.settings.defaultSiteUid:sites[0].uid);
+        if(pinned&&pinned!==defaultSite){
+            new Notice("The Markdown source is pinned to an unavailable Site.");return;
+        }
+        let site=defaultSite,subject=file.basename,preheader="",list="",audiences:Audience[]=[];
+        let siteRevision=0,busy=false;
+        const modal=new Modal(this.app);
+        const c=modal.contentEl;c.empty();
+        modal.titleEl.setText("Email Only — Prepare Verified Workflow");
+        c.createEl("p",{text:"Copy the COMPLETE independent Markdown into a Standalone Email Plan. No Website Post or remote Campaign is created by this step."});
+        new Setting(c).setName("HakiSend Site (owner; not a Post)").addDropdown(d=>{
+            for(const row of sites)d.addOption(row.uid,row.name);
+            d.setValue(site).onChange(v=>{
+                site=v;list="";audiences=[];siteRevision++;
+                if(pinned&&pinned!==v)new Notice("Source Site is pinned; cannot import to a different Site.");
+            });
+        });
+        new Setting(c).setName("Email subject").addText(t=>
+            t.setValue(subject).onChange(v=>{subject=v;}));
+        new Setting(c).setName("Preview text (optional)").addText(t=>
+            t.setValue(preheader).onChange(v=>{preheader=v;}));
+        const listArea=c.createDiv();
+        const renderLists=()=>{
+            listArea.empty();
+            if(!audiences.length){
+                listArea.createEl("p",{text:"Load authorized Email Lists to select the recipient audience."});
+                return;
+            }
+            new Setting(listArea).setName("Authorized Email List").addDropdown(d=>{
+                d.addOption("","Choose an authorized List");
+                for(const row of audiences)d.addOption(row.uid,row.name);
+                d.setValue(list);d.onChange(v=>{list=v;});
+            });
+        };
+        renderLists();
+        new Setting(c).addButton(b=>b.setButtonText("Load authorized Lists (GET)").onClick(async()=>{
+            const activeSite=site,rev=++siteRevision;
+            b.setDisabled(true);
+            try{
+                if(!this.hasSecureConnection())throw Error("Secure OAuth Email connection required.");
+                const token=await this.getAccessToken();
+                const result=await requestPrivateDraft<unknown>(
+                    req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),
+                    activeSite,token,"audiences","GET");
+                if(rev!==siteRevision||site!==activeSite)return;
+                if(!Array.isArray(result)||result.length>500||!result.every(isAudience))
+                    throw Error("Unverified HakiSend List response.");
+                audiences=result;list="";renderLists();
+            }catch{new Notice("Email List lookup unavailable or unauthorized.");}
+            finally{b.setDisabled(false);}
+        }));
+        new Setting(c).addButton(b=>b.setButtonText("Create Standalone Email Plan in Vault").setCta().onClick(async()=>{
+            if(busy)return;
+            busy=true;b.setDisabled(true);
+            try{
+                if(!audiences.some(x=>x.uid===list)||!list)
+                    throw Error("Choose a currently authorized Email List.");
+                if(pinned&&pinned!==site)throw Error("Pinned source Site differs.");
+                if(!this.settings.sites.some(s=>s.uid===site))
+                    throw Error("This HakiSend Site is no longer authorized.");
+                const active=this.app.workspace.getActiveFile();
+                if(!active||active.path!==file.path||
+                   await this.app.vault.read(file)!==original)
+                    throw Error("Source note changed. Reopen import to review.");
+                const plan=createEmailOnlyPlanFromMarkdown({
+                    siteUid:site,listUid:list,subject,preheader,
+                    originalPath:file.path,sourceMarkdown:original
+                });
+                const paths=localEmailPlanPaths(site,"standalone",subject);
+                if(!this.app.vault.getAbstractFileByPath(paths.root))
+                    await this.app.vault.createFolder(paths.root);
+                if(!this.app.vault.getAbstractFileByPath(paths.directory))
+                    await this.app.vault.createFolder(paths.directory);
+                let created:TFile|null=null;
+                for(let n=1;n<=1000;n++){
+                    const name=paths.directory+"/"+paths.basename+
+                        (n===1?"":" ("+n+")")+".md";
+                    if(this.app.vault.getAbstractFileByPath(name))continue;
+                    created=await this.app.vault.create(name,plan.planMarkdown);break;
+                }
+                if(!created)throw Error("No free filename for Standalone Email.");
+                modal.close();
+                await this.app.workspace.getLeaf(true).openFile(created);
+                new Notice("Complete Email Only content prepared; nothing sent.");
+                await this.openR3EmailOnlyLifecycle();
+            }catch(err){new Notice("Email Only not prepared: "+String(err).slice(0,160));}
+            finally{busy=false;b.setDisabled(false);}
+        }));
+        modal.open();
+    }
+
+    /**
+     * One Obsidian entry point for the real four existing API-backed actions.
+     * Each write continues to use its original review/confirmation modal.
+     * Pending request IDs cannot be silently retried.
+     */
+    private async openR3EmailOnlyLifecycle():Promise<void>{
+        const file=this.app.workspace.getActiveFile();
+        if(!file||file.extension!=="md"){
+            new Notice("Open a Standalone Email Plan.");return;
+        }
+        let plan:StandalonePlan;
+        const fm=this.app.metadataCache.getFileCache(file)?.frontmatter??{};
+        try{
+            plan=parseStandalonePlan(file,fm,await this.app.vault.read(file));
+            if(!this.settings.sites.some(s=>s.uid===plan.siteUid))
+                throw Error("Unauthorized Site.");
+        }catch(err){new Notice("Email Only workflow unavailable: "+String(err).slice(0,150));return;}
+        const modal=new Modal(this.app);
+        modal.titleEl.setText("Email Only — Native HakiSend/Acelle workflow");
+        const c=modal.contentEl;
+        c.createEl("p",{text:"Subject: "+plan.subject+" · Site: "+plan.siteUid+
+            " · List: "+(plan.listUid||"not assigned")});
+        c.createEl("p",{text:"Standalone: whole body. NO Website Post, NO Facebook and no Member/Paid extraction."});
+        const stage1=!!plan.draftUid&&!!plan.revision&&
+            fm.hakisend_remote_email_status==="private_draft";
+        const campaign=typeof fm.hakisend_acelle_campaign_uid==="string"
+            ?fm.hakisend_acelle_campaign_uid:"";
+        const stage2=stage1&&/^[a-f0-9]{13}$/i.test(campaign)&&
+            fm.hakisend_acelle_campaign_status==="new_draft_not_sent";
+        c.createEl("p",{text:"Private Draft: "+(stage1?"VERIFIED":
+            (plan.requestUid?"REQUEST PENDING · GET recovery required":"NOT CREATED"))});
+        c.createEl("p",{text:"Acelle Campaign: "+(stage2?"VERIFIED NEW":
+            (fm.hakisend_acelle_promotion_request_uid?"REQUEST PENDING · GET recovery required":"NOT CREATED"))});
+        const next=(title:string,detail:string,action:()=>Promise<void>,enabled:boolean)=>{
+            new Setting(c).setName(title).setDesc(detail)
+              .addButton(b=>b.setButtonText("Open step").setDisabled(!enabled).onClick(async()=>{
+                modal.close();await action();
+              }));
+        };
+        next("1 · Save HakiSend Private Draft",
+            "Native Sites API · checks authorized List and persists request UID before POST.",
+            ()=>this.openManualPrivateDraftSave(),!stage1&&!plan.requestUid&&!plan.draftUid);
+        next("1R · Recover uncertain Private Draft (GET only)",
+            "Read the Sites Draft index and exact detail. Never retry the original POST.",
+            ()=>this.recoverR3EmailOnlyPrivateDraft(),
+            !stage1&&!!plan.requestUid&&!plan.draftUid);
+        next("2 · Create Acelle Campaign NEW",
+            "Native Publisher API · verified sender · explicit confirmation · NO SEND.",
+            ()=>this.openManualPrivateDraftPromotion(),
+            stage1&&!fm.hakisend_acelle_promotion_request_uid&&!campaign);
+        next("2R · Recover uncertain Campaign receipt",
+            "GET ONLY · never promote twice after ambiguous POST.",
+            ()=>this.recoverManualPrivatePromotion(),
+            stage1&&!!fm.hakisend_acelle_promotion_request_uid&&!stage2);
+        next("3 · Check native Acelle delivery readiness",
+            "Read-only server checks, recipients and sender identity.",
+            ()=>this.openManualDeliveryReadiness(),stage2);
+        next("4 · Send Now / Schedule THIS Campaign",
+            "Pin to the verified Email Only Campaign, run native preflight and confirm manually.",
+            async()=>{this.createR3NativeDeliveryModal({
+                site:plan.siteUid,campaign,notePath:file.path
+            }).open();},stage2);
+        if(!stage1&&!!plan.requestUid){
+            c.createEl("p",{text:"An uncertain Private Draft request exists. Do NOT create another Draft. Reconcile its UID with HakiSend (GET only)."});
+        }
+        c.createEl("p",{text:"This dialog never performs a write automatically. Backend feature flags, OAuth scope and live Acelle still govern all actions."});
+        modal.open();
+    }
+
+    /**
+     * A previously persisted but response-lost Private Draft creation is
+     * recovered by GET index + exact GET detail. Zero POSTs are performed.
+     * The original request UID remains stable even if recovery fails.
+     */
+    private async recoverR3EmailOnlyPrivateDraft():Promise<void>{
+        const file=this.app.workspace.getActiveFile();
+        if(!file||file.extension!=="md"){
+            new Notice("Open the original pending Standalone Email Plan.");return;
+        }
+        try{
+            const raw=await this.app.vault.read(file);
+            const fields={...(this.app.metadataCache.getFileCache(file)?.frontmatter??{})};
+            const plan=parseStandalonePlan(file,fields,raw);
+            if(!plan.requestUid||plan.draftUid||
+               !this.settings.sites.some(s=>s.uid===plan.siteUid))
+                throw Error("Only an authorized pending request can be recovered.");
+            const token=await this.getAccessToken();
+            if(!token||!this.hasSecureConnection())
+                throw Error("Secure OAuth is required.");
+            const requester=(suffix:string)=>requestPrivateDraft<unknown>(
+                req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),
+                plan.siteUid,token,suffix,"GET");
+            const remoteIndex=await requester("drafts");
+            const draftUid=locateDraftForRecovery(remoteIndex,plan);
+            const remoteDetail=await requester("drafts/"+draftUid);
+            const verified=verifyRecoveredPrivateDraft(remoteDetail,plan,draftUid);
+            if(await this.app.vault.read(file)!==raw)
+                throw Error("Email Plan changed during GET verification.");
+            await this.app.fileManager.processFrontMatter(file,fm=>{
+                if(fm.site_uid!==plan.siteUid||
+                   fm.email_subject!==plan.subject||
+                   (fm.email_preheader??"")!==plan.preheader||
+                   fm.email_list_uid!==plan.listUid||
+                   fm.hakisend_remote_email_request_uid!==plan.requestUid||
+                   !!fm.hakisend_remote_email_draft_uid||
+                   (fm.hakisend_remote_email_revision??null)!==null)
+                    throw Error("Local request identity changed during recovery.");
+                fm.hakisend_remote_email_draft_uid=verified.uid;
+                fm.hakisend_remote_email_revision=verified.revision;
+                fm.hakisend_remote_email_status="private_draft";
+            });
+            await this.app.vault.process(file,latest=>{
+                if(extractStandaloneEmailBody(latest)!==plan.body)
+                    throw Error("Email body changed after remote receipt recovery.");
+                return decorateLocalPlan(latest,verified.revision);
+            });
+            new Notice("Private Draft recovered by GET. No new Campaign and no email sent.");
+        }catch(error){
+            new Notice("GET-only recovery blocked: "+String(error).slice(0,140)+". Do NOT retry POST.");
+        }
+    }
 
     private async openManualPrivateDraftSave():Promise<void> {
         try {

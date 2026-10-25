@@ -4,6 +4,7 @@ on:
     branches:
       - work/r3-multichannel-two-email-kinds-20261025
       - work/r3-email-native-promotion-receipt-recovery-20261025
+      - work/r3-email-only-obsidian-guided-real-api-20261025
   workflow_dispatch:
 permissions:
   contents: read
@@ -33,6 +34,9 @@ jobs:
           grep -Fq 'r3-create-multichannel-distribution-plan' main.js
           grep -Fq 'r3-view-local-multichannel-plan-calendar' main.js
           grep -Fq 'r3-recover-pending-delivery-receipts' main.js
+          grep -Fq 'r3-email-only-from-markdown' main.js
+          grep -Fq 'r3-email-only-workflow' main.js
+          grep -Fq 'Inspect THIS Campaign preflight' main.js
           grep -Fq 'email-create-local-plan' main.js
           grep -Fq 'r3-native-email-delivery' main.js
           grep -Fq 'Post Free Email requires exactly one explicit Free block' main.js
