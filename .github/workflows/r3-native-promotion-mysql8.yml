@@ -1,0 +1,61 @@
+name: R3 Native Promotion — real service / isolated MySQL 8
+on:
+  push:
+    branches:
+      - work/r3-native-promotion-actual-mysql8-20261025
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-promotion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: testpass
+          MYSQL_DATABASE: r3_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -ptestpass"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      R3_DB_HOST: 127.0.0.1
+      R3_DB_NAME: r3_test
+      R3_DB_USER: root
+      R3_DB_PASSWORD: testpass
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, pdo_mysql
+          tools: composer:v2
+      - name: Verify pinned fixture checksum and extract to isolated workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "f9c87e4dfdf4751fa19d1fabbb1b09b0e7e579cf685a4dbe0f60a1bac49b120b  staging/r3-native-promotion/fixtures.zip" | sha256sum -c -
+          cd staging/r3-native-promotion
+          unzip -q fixtures.zip
+          php -l PrivateDraftCampaign.php
+          php -l MarkdownPreview.php
+          php -l native_mysql_test.php
+      - name: Exercise actual Publisher promotion service against isolated MySQL8
+        working-directory: staging/r3-native-promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash RUN_IN_GITHUB_ACTIONS_ONLY.sh | tee result.txt
+          grep -Fq 'RESULT=R3_NATIVE_PROMOTION_REAL_SERVICE_MYSQL8_PASS' result.txt
+      - name: Upload test-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r3-native-promotion-mysql8-evidence
+          path: staging/r3-native-promotion/result.txt
+          if-no-files-found: warn
