@@ -12,6 +12,8 @@ import { Modal,
 } from "obsidian";
 
 import {requestPrivateDraft} from "./email/hakisend-draft-api";
+import {createR3LocalPlan,renderR3LocalPlan,type R3Input,type R3ListTarget,type R3PageTarget,type R3Mode,type R3Kind} from "./multichannel/r3-distribution-contract";
+import {r3LocalCalendar,type R3LocalCalendarEntry} from "./multichannel/r3-local-calendar";
 import {fetchR3Campaigns,fetchR3Preflight,type R3Campaigns,type R3Preflight} from "./email/publisher-r3-read";
 import {sendR3Once,readR3Receipt,type R3Intent,type DeliveryAction,type R3Payload,type R3Receipt} from "./email/publisher-r3-delivery";
 import {parsePrivateDraftList, parsePrivateDraftDetail, type PrivateDraftListRow, type PrivateDraftReadOnlyDetail} from "./email/private-draft-list";
@@ -2434,6 +2436,250 @@ class HakiSendR3NativeDeliveryModal extends Modal {
   onClose():void{this.seq++;this.contentEl.empty();}
 }
 
+
+/**
+ * R3 local multichannel planner. Creates a reviewable Vault note only.
+ * No server mutation, Facebook token or scheduled queue is created.
+ */
+class HakiSendR3MultichannelPlanModal extends Modal {
+    private selectedSite="";
+    private mode:R3Mode="post";
+    private title="";
+    private postTime="";
+    private lists:R3ListTarget[]=[];
+    private pages:R3PageTarget[]=[];
+    private audiences:Audience[]=[];
+    private running=false;
+    private siteRevision=0;
+    constructor(app:App,private readonly sites:readonly HakiSendSite[],
+        defaultSite:string,
+        private readonly fetchAudiences:(siteUid:string)=>Promise<Audience[]>) {
+        super(app);
+        const note=app.workspace.getActiveFile();
+        const front=note?app.metadataCache.getFileCache(note)?.frontmatter:{};
+        const pinned=typeof front?.site_uid==='string'?front.site_uid:'';
+        this.selectedSite=sites.some(s=>s.uid===pinned)?pinned:
+            (sites.some(s=>s.uid===defaultSite)?defaultSite:(sites[0]?.uid??""));
+        this.title=note?.basename??"";
+    }
+    onOpen():void{
+        const c=this.contentEl;c.empty();
+        c.createEl("h2",{text:"HakiSend — Multichannel Distribution Plan (R3)"});
+        c.createEl("p",{text:"Plan Website, Post Free Email, Standalone Email and Facebook Pages. Only creates a local review note; nothing is sent or scheduled."});
+        const note=this.app.workspace.getActiveFile();
+        if(!note||note.extension!=="md"||!this.sites.length){
+            c.createEl("p",{text:"Open an editable Markdown note and connect at least one HakiSend Site."});return;
+        }
+        new Setting(c).setName("Mode").addDropdown(d=>d
+            .addOption("post","Website Post + optional Free Email and Facebook")
+            .addOption("email_only","Email Only — all Markdown, no Website Post")
+            .setValue(this.mode).onChange(v=>{
+                this.mode=v as R3Mode;
+                if(this.mode==="email_only"){this.pages=[];this.postTime="";}
+                this.renderConditional();
+            }));
+        new Setting(c).setName("Site (owner)").setDesc("Email Only uses the Site for ownership; it does not create a Website Post.")
+            .addDropdown(d=>{
+                for(const site of this.sites)d.addOption(site.uid,site.name);
+                d.setValue(this.selectedSite);
+                d.onChange(v=>{
+                    this.selectedSite=v;this.audiences=[];this.lists=[];this.siteRevision++;
+                    this.renderConditional();
+                });
+            });
+        new Setting(c).setName("Title").addText(t=>t.setValue(this.title).onChange(v=>{this.title=v;}));
+        // Fresh, local-only controls in this modal; no external action on change.
+        const options=c.createDiv();
+        const audiences=c.createDiv();
+        new Setting(c).addButton(b=>b.setButtonText("Create local distribution plan").setCta().onClick(async()=>{
+            if(this.running)return;
+            this.running=true;b.setDisabled(true);
+            try{
+                const file=this.app.workspace.getActiveFile();
+                if(!file||file.path!==note.path||file.extension!=="md")
+                    throw Error("Source note changed. Reopen Distribution Plan.");
+                const fm=this.app.metadataCache.getFileCache(file)?.frontmatter??{};
+                if(fm.hakisend_import_snapshot===true||fm.hakisend_read_only===true)
+                    throw Error("Read-only import cannot be a distribution source.");
+                if(this.mode==="post"&&typeof fm.site_uid==='string'&&fm.site_uid!==this.selectedSite)
+                    throw Error("Post pinned Site changed. Use the Post's Site or edit its metadata first.");
+                const input:R3Input={
+                    mode:this.mode,siteUid:this.selectedSite,notePath:file.path,title:this.title,
+                    markdown:await this.app.vault.read(file),postScheduledAt:this.postTime||undefined,
+                    lists:this.lists.map(x=>({...x})),
+                    pages:this.mode==="post"?this.pages.map(x=>({...x})):[]
+                };
+                const plan=createR3LocalPlan(input);
+                const root="HakiSend Distribution Plans";
+                const folder=root+"/"+plan.siteUid;
+                if(!this.app.vault.getAbstractFileByPath(root))await this.app.vault.createFolder(root);
+                if(!this.app.vault.getAbstractFileByPath(folder))await this.app.vault.createFolder(folder);
+                const created=await this.app.vault.create(folder+"/"+uuidV4()+".md",renderR3LocalPlan(plan));
+                this.close();await this.app.workspace.getLeaf(true).openFile(created);
+                new Notice("Multichannel plan created locally. Nothing published, emailed or scheduled.");
+            }catch(err){new Notice("Plan blocked: "+(err instanceof Error?err.message:"unknown").slice(0,180));}
+            finally{this.running=false;b.setDisabled(false);}
+        }));
+        // override swapped nodes with the actual new DOM instances
+        this.renderInto(options,audiences);
+    }
+    private renderConditional():void{
+        const c=this.contentEl.querySelector('[data-r3-options]') as HTMLElement|null;
+        const a=this.contentEl.querySelector('[data-r3-audiences]') as HTMLElement|null;
+        if(c&&a)this.renderInto(c,a);
+    }
+    private renderInto(options:HTMLElement,audiences:HTMLElement):void{
+        options.setAttribute('data-r3-options','1');
+        audiences.setAttribute('data-r3-audiences','1');
+        options.empty();audiences.empty();
+        if(this.mode==="post"){
+            new Setting(options).setName("Website publication time")
+                .setDesc("Optional ISO 8601 with explicit offset; independent of email and Facebook times.")
+                .addText(t=>t.setPlaceholder("2026-11-04T08:00:00+07:00").setValue(this.postTime)
+                    .onChange(v=>{this.postTime=v;}));
+            new Setting(options).setName("Facebook Fanpages")
+                .setDesc("Local Page IDs only. Backend permission and per-Page tokens must be verified before real posting.")
+                .addButton(b=>b.setButtonText("Add Page").onClick(()=>{
+                    this.pages.push({pageId:"",pageName:"",scheduledAt:""});
+                    this.renderConditional();
+                }));
+            this.pages.forEach((p,i)=>{
+                const row=options.createDiv();
+                new Setting(row).setName("Facebook Page #"+(i+1))
+                    .addText(t=>t.setPlaceholder("Numeric Page ID").setValue(p.pageId).onChange(v=>{p.pageId=v;}))
+                    .addText(t=>t.setPlaceholder("Page name").setValue(p.pageName).onChange(v=>{p.pageName=v;}))
+                    .addButton(b=>b.setIcon("trash").onClick(()=>{this.pages.splice(i,1);this.renderConditional();}));
+                new Setting(row).setName("Facebook post time (optional)").addText(t=>
+                    t.setPlaceholder("2026-11-05T08:00:00+07:00").setValue(p.scheduledAt??"")
+                     .onChange(v=>{p.scheduledAt=v;}));
+            });
+            options.createEl("p",{text:"Post Free Email requires <!-- hakisend:free:start --> and <!-- hakisend:free:end --> in the source Markdown; the backend must still attest guest-visible content."});
+        }else{
+            options.createEl("p",{text:"Email Only takes the complete Markdown body (excluding YAML properties). It creates no Website Post and no Facebook post."});
+        }
+        const revision=this.siteRevision;
+        new Setting(audiences).setName("Email Lists for selected Site")
+            .addButton(b=>b.setButtonText("Load authorized Lists").onClick(async()=>{
+                b.setDisabled(true);
+                try{
+                    const rows=await this.fetchAudiences(this.selectedSite);
+                    if(revision!==this.siteRevision)return;
+                    if(!Array.isArray(rows)||rows.length>500||!rows.every(isAudience))
+                        throw Error("Invalid HakiSend List response");
+                    this.audiences=rows;this.renderConditional();
+                }catch(e){new Notice("List lookup unavailable: "+String(e).slice(0,150));}
+                finally{b.setDisabled(false);}
+            }));
+        new Setting(audiences).setName("One template and independent schedule per List")
+            .addButton(b=>b.setButtonText("Add Email List").setDisabled(!this.audiences.length).onClick(()=>{
+                if(!this.audiences.length)return;
+                this.lists.push({listUid:this.audiences[0].uid,
+                    templateRef:"",subject:this.title,scheduledAt:""});
+                this.renderConditional();
+            }));
+        for(let i=0;i<this.lists.length;i++){
+            const item=this.lists[i],row=audiences.createDiv();
+            new Setting(row).setName("Email List #"+(i+1))
+                .addDropdown(d=>{
+                    for(const a of this.audiences)d.addOption(a.uid,a.name);
+                    d.setValue(item.listUid);d.onChange(v=>{item.listUid=v;});
+                }).addButton(b=>b.setIcon("trash").onClick(()=>{
+                    this.lists.splice(i,1);this.renderConditional();
+                }));
+            new Setting(row).setName("Template reference (backend verification required)")
+                .addText(t=>t.setPlaceholder("Template UID or reference").setValue(item.templateRef)
+                    .onChange(v=>{item.templateRef=v;}));
+            new Setting(row).setName("Email subject")
+                .addText(t=>t.setValue(item.subject).onChange(v=>{item.subject=v;}));
+            new Setting(row).setName("Preview text")
+                .addText(t=>t.setValue(item.preheader??"").onChange(v=>{item.preheader=v;}));
+            new Setting(row).setName("Independent send time")
+                .addText(t=>t.setPlaceholder("2026-11-05T09:00:00+07:00").setValue(item.scheduledAt??"")
+                    .onChange(v=>{item.scheduledAt=v;}));
+        }
+        if(this.mode==="email_only"&&!this.lists.length)
+            audiences.createEl("p",{text:"Email Only requires at least one selected authorized List."});
+    }
+    onClose():void{this.siteRevision++;this.contentEl.empty();}
+}
+
+
+/**
+ * Unified local-intent calendar. Read-only data from Obsidian Vault.
+ * It must NEVER be confused with HakiSend's server-confirmed Calendar.
+ */
+class HakiSendR3LocalMultichannelCalendarModal extends Modal{
+  private chosenSite="all";
+  private chosenKind:R3Kind|"all"="all";
+  private documents:{path:string;markdown:string}[]=[];
+  private panel:HTMLElement|null=null;
+  constructor(app:App,private readonly sites:readonly HakiSendSite[]){super(app);}
+  onOpen():void{
+    const root=this.contentEl;root.empty();
+    root.createEl("h2",{text:"HakiSend — Multichannel Plan Calendar (LOCAL ONLY)"});
+    root.createEl("p",{text:"This displays future INTENTS in your Vault, not confirmed HakiSend or Facebook schedules. Never treat a local draft as sent or published."});
+    new Setting(root).setName("Site").addDropdown(d=>{
+      d.addOption("all","All authorized Sites");
+      for(const site of this.sites)d.addOption(site.uid,site.name);
+      d.onChange(v=>{this.chosenSite=v;this.renderEntries();});
+    });
+    new Setting(root).setName("Content type").addDropdown(d=>{
+      for(const [value,name] of [
+        ["all","All"],
+        ["site_post","Website Post"],
+        ["post_free_email","Post Free Email"],
+        ["standalone_email","Standalone Email"],
+        ["facebook_page_post","Facebook Fanpage"]
+      ])d.addOption(value,name);
+      d.onChange(v=>{this.chosenKind=v as R3Kind|"all";this.renderEntries();});
+    });
+    new Setting(root).addButton(b=>b.setButtonText("Refresh local plans").onClick(async()=>{
+      b.setDisabled(true);
+      try{await this.loadPlans();}catch(e){
+        new Notice("Local Calendar read failed: "+String(e).slice(0,120));
+      }finally{b.setDisabled(false);}
+    }));
+    this.panel=root.createDiv();
+    void this.loadPlans().catch(e=>{
+      new Notice("Local plan read failed: "+String(e).slice(0,120));
+    });
+  }
+  private async loadPlans():Promise<void>{
+    const files=this.app.vault.getMarkdownFiles()
+      .filter(file=>file.path.startsWith("HakiSend Distribution Plans/"));
+    if(files.length>500)throw Error("Over 500 plan notes; narrow the local dataset.");
+    const data:{path:string;markdown:string}[]=[];
+    for(const file of files){
+      if(file.stat.size>1800000){
+        data.push({path:file.path,markdown:"INVALID_OVERSIZED_PLAN"});continue;
+      }
+      data.push({path:file.path,markdown:await this.app.vault.read(file)});
+    }
+    this.documents=data;this.renderEntries();
+  }
+  private renderEntries():void{
+    const root=this.panel;if(!root)return;root.empty();
+    const cal=r3LocalCalendar(this.documents,this.chosenSite,this.chosenKind);
+    root.createEl("p",{text:cal.entries.length+" local planned actions · "+
+      cal.invalidDocuments+" invalid/unsupported plans. All statuses are LOCAL DRAFT."});
+    if(!cal.entries.length){root.createEl("p",{text:"No local plans match the Site/type filter."});return;}
+    for(const e of cal.entries){
+      const site=this.sites.find(s=>s.uid===e.siteUid);
+      const source=e.planPath;
+      new Setting(root)
+        .setName(e.title)
+        .setDesc((site?.name??e.siteUid)+" · "+e.kind.replace(/_/g," ")+" · "+
+          e.destinationLabel+" · "+(e.scheduledAtUtc??"No date set")+" · LOCAL DRAFT")
+        .addButton(b=>b.setButtonText("Open plan").onClick(async()=>{
+          const file=this.app.vault.getAbstractFileByPath(source);
+          if(!(file instanceof TFile))throw Error("Local plan no longer exists.");
+          await this.app.workspace.getLeaf(true).openFile(file);
+        }));
+    }
+  }
+  onClose():void{this.panel=null;this.documents=[];this.contentEl.empty();}
+}
+
 export default class HakiSendPublisherPlugin
     extends Plugin
 {
@@ -2521,6 +2767,32 @@ export default class HakiSendPublisherPlugin
             },
         });
 
+
+        this.addCommand({
+            id:"r3-create-multichannel-distribution-plan",
+            name:"HakiSend: Plan Multichannel Publishing — Posts, Free Emails, Standalone Emails, Facebook (local only)",
+            callback:()=>new HakiSendR3MultichannelPlanModal(
+                this.app,this.settings.sites,this.settings.defaultSiteUid,
+                async site=>{
+                    if(!this.hasSecureConnection())throw Error("Secure OAuth email:read required.");
+                    const token=await this.getAccessToken();
+                    const origin=normalizeBaseUrl(this.settings.apiBaseUrl);
+                    const result=await requestPrivateDraft<unknown>(
+                        req=>requestUrl(req),origin,site,token,"audiences","GET");
+                    if(!Array.isArray(result)||!result.every(isAudience))
+                        throw Error("Audience authorization could not be verified.");
+                    return result as Audience[];
+                }
+            ).open()
+        });
+
+        this.addCommand({
+            id:"r3-view-local-multichannel-plan-calendar",
+            name:"HakiSend: View Multichannel Plan Calendar by Site/Page/List (local-only)",
+            callback:()=>new HakiSendR3LocalMultichannelCalendarModal(
+                this.app,this.settings.sites
+            ).open()
+        });
         this.addCommand({
             id: "email-create-local-plan",
             name: "HakiSend: Create Email Plan (local-only)",
