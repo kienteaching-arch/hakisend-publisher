@@ -21,7 +21,7 @@ test('All Sites includes real Site labels and Facebook Page identities',()=>{
  ];
  const view=r3LocalCalendar(docs);
  assert.deepEqual(view.entries.map(x=>x.kind),
- ['site_post','post_free_email','facebook_page_post','standalone_email']);
+ ['post_free_email','site_post','facebook_page_post','standalone_email']);
  assert.equal(view.entries[2].destinationLabel,'Kiên Parenting Page');
  assert.equal(view.entries[0].siteUid,site);
  assert.equal(view.entries[3].siteUid,other);
