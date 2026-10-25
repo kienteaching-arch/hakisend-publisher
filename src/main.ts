@@ -12,6 +12,8 @@ import { Modal,
 } from "obsidian";
 
 import {requestPrivateDraft} from "./email/hakisend-draft-api";
+import {fetchR3Campaigns,fetchR3Preflight,type R3Campaigns,type R3Preflight} from "./email/publisher-r3-read";
+import {sendR3Once,readR3Receipt,type R3Intent,type DeliveryAction,type R3Payload,type R3Receipt} from "./email/publisher-r3-delivery";
 import {parsePrivateDraftList, parsePrivateDraftDetail, type PrivateDraftListRow, type PrivateDraftReadOnlyDetail} from "./email/private-draft-list";
 import {
     parseStandalonePlan, extractStandaloneEmailBody, isAudience, isRevisionConflict,
@@ -107,6 +109,7 @@ interface PendingConnection {
     apiBaseUrl: string;
     createdAt: number;
     emailAccessRequested?: boolean;
+    deliveryAccessRequested?: boolean;
 }
 
 interface ExchangeResponse {
@@ -2306,6 +2309,131 @@ class HakiSendPagedCalendarModal extends Modal {
     }
 }
 
+
+/** R3 development-only OAuth delivery dialog. No automatic send/schedule. */
+class HakiSendR3NativeDeliveryModal extends Modal {
+  private chosenSite="";
+  private seq=0;
+  constructor(app:App,private readonly sites:readonly HakiSendSite[],
+    private readonly list:(site:string)=>Promise<R3Campaigns>,
+    private readonly inspect:(site:string,campaign:string)=>Promise<R3Preflight>,
+    private readonly pending:(site:string,campaign:string)=>R3Intent|null,
+    private readonly submit:(site:string,campaign:string,action:DeliveryAction,p:R3Payload)=>Promise<R3Receipt>,
+    private readonly recover:(intent:R3Intent)=>Promise<R3Receipt>) {super(app);}
+  onOpen():void{
+    const root=this.contentEl;root.empty();
+    root.createEl("h2",{text:"HakiSend · Native Email Delivery (R3 development)"});
+    root.createEl("p",{text:"Choose a Site, read native preflight, review recipients and approve exactly once. A lost response must be recovered by GET; never press Send again."});
+    const area=root.createDiv();
+    new Setting(root).setName("HakiSend Site").addDropdown(drop=>{
+      drop.addOption("","Choose Site");
+      for(const site of this.sites)drop.addOption(site.uid,site.name);
+      drop.onChange(value=>{this.chosenSite=value;this.seq++;area.empty();});
+    });
+    new Setting(root).addButton(btn=>btn.setButtonText("Load Campaigns (read-only)").onClick(async()=>{
+      const site=this.chosenSite;
+      if(!site||!this.sites.some(s=>s.uid===site)){new Notice("Choose a Site.");return;}
+      const seq=++this.seq;area.empty();area.createEl("p",{text:"Loading…"});
+      try {
+        const result=await this.list(site);
+        if(seq!==this.seq||site!==this.chosenSite)return;
+        area.empty();
+        const eligible=result.campaigns.filter(x=>x.status==="new");
+        if(!eligible.length){area.createEl("p",{text:"No eligible NEW Campaigns for this Site."});return;}
+        const dropdown=area.createEl("select");
+        for(const row of eligible){const option=dropdown.createEl("option");option.value=row.uid;option.text=row.name;}
+        const detail=area.createDiv();
+        new Setting(area).addButton(btn=>btn.setButtonText("Inspect native preflight").onClick(async()=>{
+          const campaign=dropdown.value;detail.empty();detail.createEl("p",{text:"Checking…"});
+          try {
+            const check=await this.inspect(site,campaign);
+            if(seq!==this.seq||site!==this.chosenSite||campaign!==dropdown.value)return;
+            detail.empty();
+            const required=['site_audience','native_state','campaign_permission','native_setup',
+              'sender','unsubscribe','native_recipient_count','credit'];
+            const count=check.recipientCount;
+            const allowed=check.campaign.status==='new'&&count!==null&&count>0&&
+              required.every(key=>check.checks[key]?.state==='pass');
+            detail.createEl("p",{text:check.campaign.name+" · "+check.campaign.status+" · "+String(count)+" eligible recipients"});
+            for(const [key,value] of Object.entries(check.checks)){
+              detail.createEl("p",{text:key+" · "+value.state+" · "+value.detail});
+            }
+            if(!allowed){detail.createEl("strong",{text:"BLOCKED. Correct HakiSend native preflight first."});return;}
+            const exists=this.pending(site,campaign);
+            if(exists) {
+              detail.createEl("p",{text:"An approval request has already been persisted for this Campaign. Recovery is GET only."});
+              new Setting(detail).addButton(b=>b.setButtonText("Recover previous receipt").onClick(async()=>{
+                try{const receipt=await this.recover(exists);new Notice("Journal: "+receipt.journalStatus+" — not Inbox proof");}
+                catch{new Notice("Receipt requires operator reconciliation. Do not send again.");}
+              }));
+              return;
+            }
+            this.renderConfirmation(detail,site,campaign,count);
+          } catch(e){detail.empty();detail.createEl("p",{text:String(e)});}
+        }));
+      }catch(e){if(seq!==this.seq)return;area.empty();area.createEl("p",{text:String(e)});}
+    }));
+  }
+  private renderConfirmation(root:HTMLElement,site:string,campaign:string,count:number):void {
+    let action:DeliveryAction='send_now';
+    let basis:'single_optin'|'double_optin'|'existing_relationship'='single_optin';
+    let consentSource='';
+    let timezone='Asia/Ho_Chi_Minh';
+    let date:HTMLInputElement|undefined,time:HTMLInputElement|undefined;
+    const calendar=root.createDiv();
+    const renderTime=()=>{
+      calendar.empty();date=undefined;time=undefined;
+      if(action==='schedule'){
+        calendar.createEl('p',{text:'Scheduled time (at least 15 minutes in the future)'});
+        date=calendar.createEl('input',{attr:{type:'date'}});
+        time=calendar.createEl('input',{attr:{type:'time'}});
+        new Setting(calendar).setName('Timezone').addDropdown(d=>{
+          for(const z of ['Asia/Ho_Chi_Minh','UTC','America/New_York','Europe/London'])d.addOption(z,z);
+          d.onChange(z=>{timezone=z;});
+        });
+      }
+    };
+    new Setting(root).setName('Action').addDropdown(d=>{
+      d.addOption('send_now','Send Now');d.addOption('schedule','Schedule');
+      d.onChange(v=>{action=v as DeliveryAction;renderTime();});
+    });
+    renderTime();
+    new Setting(root).setName('Consent basis').addDropdown(d=>{
+      d.addOption('single_optin','Single opt-in');d.addOption('double_optin','Double opt-in');
+      d.addOption('existing_relationship','Existing customer relationship');
+      d.onChange(v=>{basis=v as typeof basis;});
+    });
+    new Setting(root).setName('Actual consent evidence source')
+      .addText(t=>t.setPlaceholder('Actual signup form/log, minimum 12 characters').onChange(v=>{consentSource=v;}));
+    const summary=root.createDiv(),feedback=root.createDiv();
+    new Setting(root).addButton(btn=>btn.setButtonText('Review delivery details').onClick(()=>{
+      summary.empty();feedback.empty();
+      const approvedAction=action,approvedBasis=basis,approvedSource=consentSource,approvedZone=timezone;
+      const approvedDate=action==='schedule'?date?.value:undefined;
+      const approvedTime=action==='schedule'?time?.value:undefined;
+      if(!approvedSource||approvedSource.trim().length<12||
+        (approvedAction==='schedule'&&(!approvedDate||!approvedTime))){
+        feedback.createEl('p',{text:'Complete the consent source and any scheduled date/time.'});return;
+      }
+      summary.createEl('p',{text:'Site '+site+' · Campaign '+campaign+' · '+count+
+        ' recipients · '+approvedAction+' · '+(approvedAction==='schedule'?
+          approvedDate+' '+approvedTime+' '+approvedZone:'Immediately')});
+      const approve=summary.createEl('button',{text:'Confirm '+approvedAction+' for '+count+' recipients'});
+      approve.addEventListener('click',async()=>{
+        approve.disabled=true;
+        const id=crypto.randomUUID();
+        const payload:R3Payload={request_uid:id,recipient_count_snapshot:count,
+          consent_basis:approvedBasis,consent_source:approvedSource,approval_confirmed:true,
+          ...(approvedAction==='schedule'?{delivery_date:approvedDate,delivery_time:approvedTime,timezone:approvedZone}:{})};
+        try{const result=await this.submit(site,campaign,approvedAction,payload);
+          feedback.createEl('p',{text:'Journal '+result.journalStatus+'. Not proof of Inbox receipt.'});
+        }catch(e){feedback.createEl('p',{text:'Do not retry. Use read-only receipt recovery. '+String(e)});}
+      });
+    }));
+  }
+  onClose():void{this.seq++;this.contentEl.empty();}
+}
+
 export default class HakiSendPublisherPlugin
     extends Plugin
 {
@@ -2430,6 +2558,40 @@ export default class HakiSendPublisherPlugin
             callback:async()=>{await this.recoverManualPrivatePromotion();},
         });
 
+        this.addCommand({
+            id:"r3-reconnect-native-delivery",
+            name:"HakiSend: Request Send/Schedule OAuth permission (R3)",
+            callback:async()=>{await this.startBrowserConnect(true,true);},
+        });
+        this.addCommand({
+            id:"r3-native-email-delivery",
+            name:"HakiSend: Send Now or Schedule Email (R3 development)",
+            callback:()=>new HakiSendR3NativeDeliveryModal(
+                this.app,this.settings.sites,
+                async site=>{
+                    const token=await this.getAccessToken();
+                    if(!this.hasSecureConnection())throw Error("Secure OAuth required");
+                    return fetchR3Campaigns(req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),site,token);
+                },
+                async (site,campaign)=>{
+                    const token=await this.getAccessToken();
+                    if(!this.hasSecureConnection())throw Error("Secure OAuth required");
+                    return fetchR3Preflight(req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),site,campaign,token);
+                },
+                (site,campaign)=>this.r3PendingDelivery(site,campaign),
+                async (site,campaign,action,p)=>{
+                    const token=await this.getAccessToken();
+                    if(!this.hasSecureConnection())throw Error("Secure OAuth required");
+                    return sendR3Once(req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),
+                        site,campaign,token,action,p,intent=>this.r3PersistIntent(intent));
+                },
+                async intent=>{
+                    const token=await this.getAccessToken();
+                    if(!this.hasSecureConnection())throw Error("Secure OAuth required");
+                    return readR3Receipt(req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),intent,token);
+                }
+            ).open(),
+        });
         this.addCommand({
             id: "inspect-email-delivery-readiness",
             name: "HakiSend: Check Acelle Email Delivery Readiness (read-only)",
@@ -2978,6 +3140,19 @@ export default class HakiSendPublisherPlugin
         );
     }
 
+    private r3PendingDelivery(site:string,campaign:string):R3Intent|null {
+        const s=this.settings as HakiSendPublisherSettings & {r3PendingIntents?:Record<string,R3Intent>};
+        return s.r3PendingIntents?.[site+":"+campaign]??null;
+    }
+    private async r3PersistIntent(intent:R3Intent):Promise<void> {
+        const s=this.settings as HakiSendPublisherSettings & {r3PendingIntents?:Record<string,R3Intent>};
+        const key=intent.siteUid+":"+intent.campaignUid;
+        if(s.r3PendingIntents?.[key])throw Error("Campaign already has delivery intent. GET receipt only.");
+        const previous=s.r3PendingIntents;
+        s.r3PendingIntents={...(previous??{}),[key]:intent};
+        try{await this.saveSettings();}
+        catch{ s.r3PendingIntents=previous;throw Error("Could not durably persist request. Nothing submitted.");}
+    }
     async getAccessToken(): Promise<string> {
         const secure =
             this.app.secretStorage.getSecret(
@@ -3013,7 +3188,7 @@ export default class HakiSendPublisherPlugin
             ?.trim();
     }
 
-    async startBrowserConnect(requestEmailAccess = false): Promise<void> {
+    async startBrowserConnect(requestEmailAccess = false, requestDeliveryAccess = false): Promise<void> {
         try {
             const apiBaseUrl =
                 normalizeBaseUrl(
@@ -3040,6 +3215,7 @@ export default class HakiSendPublisherPlugin
                     apiBaseUrl,
                     createdAt: Date.now(),
                     emailAccessRequested: requestEmailAccess === true,
+                    deliveryAccessRequested: requestDeliveryAccess === true,
                 };
 
             this.app.secretStorage.setSecret(
@@ -3067,7 +3243,7 @@ export default class HakiSendPublisherPlugin
                 "S256"
             );
             if (requestEmailAccess === true) {
-                url.searchParams.set("email_access_requested", "read_compose");
+                url.searchParams.set("email_access_requested", requestDeliveryAccess ? "read_compose_delivery" : "read_compose");
             }
 
             const opened = window.open(
@@ -3245,7 +3421,7 @@ export default class HakiSendPublisherPlugin
             // previous bearer and Site configuration.
             const emailReconnect = pending.emailAccessRequested === true;
             const evidence = verifyConnectScopes(
-                payload.data?.scopes,emailReconnect
+                payload.data?.scopes,emailReconnect,pending.deliveryAccessRequested===true
             );
             if (!evidence.ok) {
                 this.clearPendingConnection();

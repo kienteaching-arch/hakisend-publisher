@@ -9,6 +9,7 @@ export const PUBLISHING_SCOPES=Object.freeze([
 export const EMAIL_DRAFT_SCOPES=Object.freeze([
   'email:read','email:compose'
 ] as const);
+export const DELIVERY_SCOPES=Object.freeze(['email:send','email:schedule'] as const);
 
 export type ScopeValidation={
   readonly ok:true;
@@ -18,7 +19,7 @@ export type ScopeValidation={
   readonly reason:string;
 };
 export function verifyConnectScopes(
-  raw:unknown,emailRequested:boolean
+  raw:unknown,emailRequested:boolean,deliveryRequested=false
 ):ScopeValidation{
   if(!Array.isArray(raw))
     return {ok:false,reason:'Missing scope evidence in HakiSend exchange response.'};
@@ -28,8 +29,10 @@ export function verifyConnectScopes(
   }
   if(new Set(raw).size!==raw.length)
     return {ok:false,reason:'Duplicate scopes in exchange response.'};
+  if(deliveryRequested&&!emailRequested)return {ok:false,reason:'Delivery requires Email Draft grant.'};
   const expected=[
-    ...PUBLISHING_SCOPES,...(emailRequested?EMAIL_DRAFT_SCOPES:[])
+    ...PUBLISHING_SCOPES,...(emailRequested?EMAIL_DRAFT_SCOPES:[]),
+    ...(deliveryRequested?DELIVERY_SCOPES:[])
   ].sort();
   const actual=[...raw].sort();
   if(actual.length!==expected.length ||

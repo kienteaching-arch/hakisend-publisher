@@ -1,0 +1,42 @@
+name: R3 Obsidian native delivery - DEVELOPMENT UAT
+on:
+  push:
+    branches:
+      - work/r3-obsidian-native-delivery-dev-20261025
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dev-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NPM_CONFIG_CACHE: /tmp/hks-r3-npm-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - name: Source regression and new R3 boundary tests
+        run: node --experimental-strip-types --test tests/*.test.mjs
+      - name: TypeScript source compile
+        run: npx tsc --noEmit
+      - name: Build Obsidian development bundle
+        run: npm run build
+      - name: Existing owner tested runtime mocks
+        run: node --test tests/runtime-email-reconnect.test.cjs
+      - name: Dev UAT ZIP (not a production release)
+        run: |
+          set -euo pipefail
+          node scripts/package-development-uat.mjs
+          unzip -tq dist/hakisend-publisher-development-uat.zip
+          test -s main.js
+          test -s dist/hakisend-publisher-development-uat.zip
+          echo 'R3_DEV_UAT_BUILD=PASS'
+      - name: Upload DEV-only artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hakisend-obsidian-r3-development-test-vault-only
+          path: dist/hakisend-publisher-development-uat.zip
+          retention-days: 7
