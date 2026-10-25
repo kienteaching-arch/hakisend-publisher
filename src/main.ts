@@ -13,6 +13,7 @@ import { Modal,
 
 import {requestPrivateDraft} from "./email/hakisend-draft-api";
 import {createEmailOnlyPlanFromMarkdown,validateEmailOnlySource} from "./email/r3-email-only-source";
+import {locateDraftForRecovery,verifyRecoveredPrivateDraft} from "./email/r3-private-draft-recovery";
 import {createR3LocalPlan,renderR3LocalPlan,type R3Input,type R3ListTarget,type R3PageTarget,type R3Mode,type R3Kind} from "./multichannel/r3-distribution-contract";
 import {r3LocalCalendar,type R3LocalCalendarEntry} from "./multichannel/r3-local-calendar";
 import {fetchR3Campaigns,fetchR3Preflight,type R3Campaigns,type R3Preflight} from "./email/publisher-r3-read";
@@ -3266,6 +3267,10 @@ export default class HakiSendPublisherPlugin
         next("1 · Save HakiSend Private Draft",
             "Native Sites API · checks authorized List and persists request UID before POST.",
             ()=>this.openManualPrivateDraftSave(),!stage1&&!plan.requestUid&&!plan.draftUid);
+        next("1R · Recover uncertain Private Draft (GET only)",
+            "Read the Sites Draft index and exact detail. Never retry the original POST.",
+            ()=>this.recoverR3EmailOnlyPrivateDraft(),
+            !stage1&&!!plan.requestUid&&!plan.draftUid);
         next("2 · Create Acelle Campaign NEW",
             "Native Publisher API · verified sender · explicit confirmation · NO SEND.",
             ()=>this.openManualPrivateDraftPromotion(),
@@ -3287,6 +3292,59 @@ export default class HakiSendPublisherPlugin
         }
         c.createEl("p",{text:"This dialog never performs a write automatically. Backend feature flags, OAuth scope and live Acelle still govern all actions."});
         modal.open();
+    }
+
+    /**
+     * A previously persisted but response-lost Private Draft creation is
+     * recovered by GET index + exact GET detail. Zero POSTs are performed.
+     * The original request UID remains stable even if recovery fails.
+     */
+    private async recoverR3EmailOnlyPrivateDraft():Promise<void>{
+        const file=this.app.workspace.getActiveFile();
+        if(!file||file.extension!=="md"){
+            new Notice("Open the original pending Standalone Email Plan.");return;
+        }
+        try{
+            const raw=await this.app.vault.read(file);
+            const fields={...(this.app.metadataCache.getFileCache(file)?.frontmatter??{})};
+            const plan=parseStandalonePlan(file,fields,raw);
+            if(!plan.requestUid||plan.draftUid||
+               !this.settings.sites.some(s=>s.uid===plan.siteUid))
+                throw Error("Only an authorized pending request can be recovered.");
+            const token=await this.getAccessToken();
+            if(!token||!this.hasSecureConnection())
+                throw Error("Secure OAuth is required.");
+            const requester=(suffix:string)=>requestPrivateDraft<unknown>(
+                req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),
+                plan.siteUid,token,suffix,"GET");
+            const remoteIndex=await requester("drafts");
+            const draftUid=locateDraftForRecovery(remoteIndex,plan);
+            const remoteDetail=await requester("drafts/"+draftUid);
+            const verified=verifyRecoveredPrivateDraft(remoteDetail,plan,draftUid);
+            if(await this.app.vault.read(file)!==raw)
+                throw Error("Email Plan changed during GET verification.");
+            await this.app.fileManager.processFrontMatter(file,fm=>{
+                if(fm.site_uid!==plan.siteUid||
+                   fm.email_subject!==plan.subject||
+                   (fm.email_preheader??"")!==plan.preheader||
+                   fm.email_list_uid!==plan.listUid||
+                   fm.hakisend_remote_email_request_uid!==plan.requestUid||
+                   !!fm.hakisend_remote_email_draft_uid||
+                   (fm.hakisend_remote_email_revision??null)!==null)
+                    throw Error("Local request identity changed during recovery.");
+                fm.hakisend_remote_email_draft_uid=verified.uid;
+                fm.hakisend_remote_email_revision=verified.revision;
+                fm.hakisend_remote_email_status="private_draft";
+            });
+            await this.app.vault.process(file,latest=>{
+                if(extractStandaloneEmailBody(latest)!==plan.body)
+                    throw Error("Email body changed after remote receipt recovery.");
+                return decorateLocalPlan(latest,verified.revision);
+            });
+            new Notice("Private Draft recovered by GET. No new Campaign and no email sent.");
+        }catch(error){
+            new Notice("GET-only recovery blocked: "+String(error).slice(0,140)+". Do NOT retry POST.");
+        }
     }
 
     private async openManualPrivateDraftSave():Promise<void> {
