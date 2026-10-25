@@ -16,6 +16,7 @@ import {createR3LocalPlan,renderR3LocalPlan,type R3Input,type R3ListTarget,type 
 import {r3LocalCalendar,type R3LocalCalendarEntry} from "./multichannel/r3-local-calendar";
 import {fetchR3Campaigns,fetchR3Preflight,type R3Campaigns,type R3Preflight} from "./email/publisher-r3-read";
 import {sendR3Once,readR3Receipt,type R3Intent,type DeliveryAction,type R3Payload,type R3Receipt} from "./email/publisher-r3-delivery";
+import {knownPendingR3Receipts} from "./email/r3-pending-recovery";
 import {parsePrivateDraftList, parsePrivateDraftDetail, type PrivateDraftListRow, type PrivateDraftReadOnlyDetail} from "./email/private-draft-list";
 import {
     parseStandalonePlan, extractStandaloneEmailBody, isAudience, isRevisionConflict,
@@ -2863,6 +2864,53 @@ export default class HakiSendPublisherPlugin
                     return readR3Receipt(req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),intent,token);
                 }
             ).open(),
+        });
+
+        // GET-only recovery is always discoverable, even after the native
+        // Campaign leaves status NEW and disappears from the delivery chooser.
+        this.addCommand({
+            id:"r3-recover-pending-delivery-receipts",
+            name:"HakiSend: Recover Pending Send/Schedule Receipts (R3 · GET only)",
+            callback:()=>{
+                try{
+                    const saved=(this.settings as HakiSendPublisherSettings & {
+                        r3PendingIntents?:Record<string,R3Intent>
+                    }).r3PendingIntents;
+                    const snapshot=knownPendingR3Receipts(saved,this.settings.sites);
+                    const modal=new Modal(this.app);
+                    modal.titleEl.setText("HakiSend · Recover Delivery Receipts");
+                    modal.contentEl.createEl("p",{text:"Read-only recovery of persisted approval identities. No Campaign list or NEW status is required. Never retry a send or schedule POST."});
+                    if(snapshot.ignored)
+                        modal.contentEl.createEl("p",{text:snapshot.ignored+" invalid or unauthorized local identities were excluded; reconcile manually."});
+                    if(!snapshot.intents.length)
+                        modal.contentEl.createEl("p",{text:"No locally persisted Send/Schedule approval identities on authorized Sites."});
+                    for(const intent of snapshot.intents){
+                        const site=this.settings.sites.find(s=>s.uid===intent.siteUid);
+                        const row=new Setting(modal.contentEl)
+                            .setName((site?.name??intent.siteUid)+" · "+intent.campaignUid)
+                            .setDesc(intent.action+" · Request "+intent.requestUid+" · GET only");
+                        row.addButton(b=>b.setButtonText("Read receipt").onClick(async()=>{
+                            b.setDisabled(true);
+                            try{
+                                if(!this.hasSecureConnection())throw Error("Secure OAuth connection required.");
+                                const token=await this.getAccessToken();
+                                const result=await readR3Receipt(req=>requestUrl(req),
+                                  normalizeBaseUrl(this.settings.apiBaseUrl),intent,token);
+                                modal.contentEl.createEl("p",{text:
+                                    (site?.name??intent.siteUid)+" · Campaign "+result.campaignUid+
+                                    " · Journal "+result.journalStatus+
+                                    " · Native "+(result.nativeStatus??"not reported")+
+                                    " · NOT inbox delivery evidence."});
+                            }catch{
+                                new Notice("Receipt unavailable or uncertain. Keep the request identity; DO NOT resend.");
+                            }finally{b.setDisabled(false);}
+                        }));
+                    }
+                    modal.open();
+                }catch{
+                    new Notice("Cannot read persisted approval identities. DO NOT resend; reconcile locally.");
+                }
+            }
         });
         this.addCommand({
             id: "inspect-email-delivery-readiness",
