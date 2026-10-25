@@ -2668,7 +2668,7 @@ class HakiSendR3LocalMultichannelCalendarModal extends Modal{
       const source=e.planPath;
       new Setting(root)
         .setName(e.title)
-        .setDesc((site?.name??e.siteUid)+" · "+e.kind.replaceAll("_"," ")+" · "+
+        .setDesc((site?.name??e.siteUid)+" · "+e.kind.replace(/_/g," ")+" · "+
           e.destinationLabel+" · "+(e.scheduledAtUtc??"No date set")+" · LOCAL DRAFT")
         .addButton(b=>b.setButtonText("Open plan").onClick(async()=>{
           const file=this.app.vault.getAbstractFileByPath(source);
