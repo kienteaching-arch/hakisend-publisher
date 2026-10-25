@@ -3,7 +3,7 @@
  * Site UID is email ownership, not an implied Site Post.
  * Facebook Page never inherits HakiSend Site credentials.
  */
-import {extractStandaloneEmailBody} from '../email/private-draft-contract';
+import {extractStandaloneEmailBody} from '../email/private-draft-contract.ts';
 export type R3Kind='site_post'|'post_free_email'|'standalone_email'|'facebook_page_post';
 export type R3Mode='post'|'email_only';
 export interface R3ListTarget{
