@@ -6,6 +6,7 @@ on:
       - work/r3-email-native-promotion-receipt-recovery-20261025
       - work/r3-email-only-obsidian-guided-real-api-20261025
       - work/r3-pinned-email-source-attestation-20261026
+      - work/r3-native-content-integrity-guard-20261026
   workflow_dispatch:
 permissions:
   contents: read
@@ -40,6 +41,7 @@ jobs:
           grep -Fq 'Inspect THIS Campaign preflight' main.js
           grep -Fq 'Email Plan edited while checking remote state' main.js
           grep -Fq 'Email was edited or remote Draft differs' main.js
+          grep -Fq 'source_content_integrity' main.js
           grep -Fq 'email-create-local-plan' main.js
           grep -Fq 'r3-native-email-delivery' main.js
           grep -Fq 'Post Free Email requires exactly one explicit Free block' main.js

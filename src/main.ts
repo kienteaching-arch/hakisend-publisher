@@ -2348,7 +2348,7 @@ class HakiSendR3NativeDeliveryModal extends Modal {
           const check=await this.inspect(site,campaign);
           if(seq!==this.seq)return;
           area.empty();
-          const required=['site_audience','native_state','campaign_permission','native_setup',
+          const required=['site_audience','native_state','source_content_integrity','campaign_permission','native_setup',
             'sender','unsubscribe','native_recipient_count','credit'];
           const count=check.recipientCount;
           if(check.siteUid!==site||check.campaign.uid!==campaign){
@@ -2407,7 +2407,7 @@ class HakiSendR3NativeDeliveryModal extends Modal {
             const check=await this.inspect(site,campaign);
             if(seq!==this.seq||site!==this.chosenSite||campaign!==dropdown.value)return;
             detail.empty();
-            const required=['site_audience','native_state','campaign_permission','native_setup',
+            const required=['site_audience','native_state','source_content_integrity','campaign_permission','native_setup',
               'sender','unsubscribe','native_recipient_count','credit'];
             const count=check.recipientCount;
             const allowed=check.campaign.status==='new'&&count!==null&&count>0&&
