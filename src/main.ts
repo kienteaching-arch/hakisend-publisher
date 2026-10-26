@@ -13,6 +13,7 @@ import { Modal,
 
 import {requestPrivateDraft} from "./email/hakisend-draft-api";
 import {createEmailOnlyPlanFromMarkdown,validateEmailOnlySource} from "./email/r3-email-only-source";
+import {verifyPinnedEmailSource} from "./email/r3-pinned-email-source";
 import {locateDraftForRecovery,verifyRecoveredPrivateDraft} from "./email/r3-private-draft-recovery";
 import {createR3LocalPlan,renderR3LocalPlan,type R3Input,type R3ListTarget,type R3PageTarget,type R3Mode,type R3Kind} from "./multichannel/r3-distribution-contract";
 import {r3LocalCalendar,type R3LocalCalendarEntry} from "./multichannel/r3-local-calendar";
@@ -3087,6 +3088,10 @@ export default class HakiSendPublisherPlugin
             },
             (site,campaign)=>this.r3PendingDelivery(site,campaign),
             async(site,campaign,action,p)=>{
+                const token=await this.getAccessToken();
+                if(!token||!this.hasSecureConnection())
+                    throw Error("Secure OAuth required");
+                const origin=normalizeBaseUrl(this.settings.apiBaseUrl);
                 if(pinned){
                     const active=this.app.workspace.getActiveFile();
                     if(!active||active.path!==pinned.notePath||site!==pinned.site||
@@ -3095,15 +3100,31 @@ export default class HakiSendPublisherPlugin
                     const raw=await this.app.vault.read(active);
                     const fm=this.app.metadataCache.getFileCache(active)?.frontmatter??{};
                     const local=parseStandalonePlan(active,fm,raw);
+                    const promotionUid=fm.hakisend_acelle_promotion_request_uid;
                     if(local.siteUid!==site||
                        fm.hakisend_acelle_campaign_uid!==campaign||
                        fm.hakisend_acelle_campaign_status!=="new_draft_not_sent"||
-                       !local.draftUid||!local.revision)
+                       !local.draftUid||!local.revision||
+                       typeof promotionUid!=="string")
                         throw Error("Email Campaign no longer matches verified local source.");
+                    // GET-only pre-dispatch attestation. A user may edit the Plan
+                    // AFTER Campaign creation, making the displayed local body
+                    // different from the actual promoted Acelle HTML. Fail closed.
+                    const remoteDraft=await requestPrivateDraft<unknown>(
+                        req=>requestUrl(req),origin,site,token,
+                        "drafts/"+local.draftUid,"GET");
+                    const promotionReceipt=await requestPromotion(
+                        req=>requestUrl(req),origin,site,local.draftUid,
+                        promotionUid,token,"GET");
+                    verifyPinnedEmailSource(local,campaign,promotionUid,
+                        remoteDraft,promotionReceipt);
+                    if(await this.app.vault.read(active)!==raw||
+                       this.app.workspace.getActiveFile()?.path!==pinned.notePath)
+                        throw Error("Email Plan edited while checking remote state. No send submitted.");
                 }
-                const token=await this.getAccessToken();
-                if(!this.hasSecureConnection())throw Error("Secure OAuth required");
-                return sendR3Once(req=>requestUrl(req),normalizeBaseUrl(this.settings.apiBaseUrl),
+                // Only after all GET checks pass may the existing one-shot
+                // journal persist intent and submit a single R3 delivery POST.
+                return sendR3Once(req=>requestUrl(req),origin,
                     site,campaign,token,action,p,intent=>this.r3PersistIntent(intent));
             },
             async intent=>{
@@ -3283,7 +3304,7 @@ export default class HakiSendPublisherPlugin
             "Read-only server checks, recipients and sender identity.",
             ()=>this.openManualDeliveryReadiness(),stage2);
         next("4 · Send Now / Schedule THIS Campaign",
-            "Pin to the verified Email Only Campaign, run native preflight and confirm manually.",
+            "Pin to the verified Email Only Campaign; GET-check full Markdown, List, revision and promotion receipt before native Send/Schedule.",
             async()=>{this.createR3NativeDeliveryModal({
                 site:plan.siteUid,campaign,notePath:file.path
             }).open();},stage2);
