@@ -4,18 +4,25 @@ Publish Markdown notes from Obsidian to HakiSend.
 
 HakiSend Publisher connects an Obsidian vault to a HakiSend Site so you can write locally, save drafts, schedule Posts, and publish without copying Markdown into a browser editor.
 
+> **Release status:** This branch contains a **0.1.36 review candidate**, not an approved Community Plugins release. The earlier TypeScript sources do not reproduce its runtime bundle. Read [release readiness and blockers](RELEASE_CANDIDATE_0.1.36.md) before installing or redistributing it. The general Website authoring documentation below was written for the earlier public release; commands and capabilities in 0.1.36 also include Email workflows.
+
 ## Requirements
 
 - Obsidian 1.11.4 or later.
 - A HakiSend account.
 - Access to at least one HakiSend Site.
 - An internet connection for HakiSend operations.
+- Some HakiSend features may depend on the service plan associated with your account.
 
 ## Account and network access
 
 HakiSend Publisher requires a HakiSend account for publishing features.
 
 When you connect, save, upload media, schedule, publish, or disconnect, the plugin communicates with the HakiSend API over the network.
+
+Email drafting, campaign preparation, and explicit Send/Schedule actions also communicate with HakiSend's server. The plugin may open the HakiSend Website + Email Calendar in a browser; the server calendar is not currently displayed as one native Obsidian calendar grid.
+
+Creating new Facebook publishing operations is disabled in candidate 0.1.36; saved historical plan data is preserved. No new Facebook API posting is provided by this candidate.
 
 Your Markdown source remains in your Obsidian vault. Publishing operations send the content and metadata required for the requested HakiSend operation.
 
@@ -135,7 +142,7 @@ Do not copy another user's data.json or plugin connection state.
 
 ## Development
 
-Install dependencies:
+For the original public source version, install dependencies:
 
     npm install
 
@@ -143,11 +150,17 @@ Build the production plugin:
 
     npm run build
 
-The production build creates main.js from src/main.ts.
+**Important for candidate 0.1.36:** The repository's existing `src/main.ts` and `package.json` are from an earlier release. Running `npm run build` does **not** reproduce the checked-in 0.1.36 `main.js`. Do not distribute a newly built bundle as 0.1.36 until maintainable matching source and a verified build are restored.
+
+The candidate's frozen runtime checksum and non-mutating contract tests can be checked with:
+
+    node --check main.js
+    node scripts/check-candidate.mjs
+    node --test tests/*.test.cjs
 
 ## Releases
 
-The plugin version is defined in manifest.json and package.json.
+For a public release, the plugin version must agree in manifest.json and package.json. The 0.1.36 candidate intentionally has a version mismatch and must not be released yet.
 
 versions.json maps each plugin version to the minimum compatible Obsidian version.
 

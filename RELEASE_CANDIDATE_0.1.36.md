@@ -27,6 +27,9 @@ These checks do **not** prove full end-to-end behavior against a live HakiSend s
 3. **End-to-end UAT**: Complete a one-recipient delivery and receipt verification, sync/conflict tests, and check HTML entities/Cloud Sync behavior.
 4. **Calendar scope**: The Website + Email server Calendar is opened in the browser; it is not yet a single native Obsidian Calendar grid. Historical Facebook plans remain readable; new Facebook sending is intentionally disabled.
 5. **Plugin reviewer QA**: Audit network requests, token handling, device compatibility, UI behavior, settings disclosures, errors, and Obsidian developer-policy compliance.
+   - Obsidian's published policies require clear README disclosure of required accounts, network access, possible paid features and any data transmitted to remote services.
+   - Determine whether the HakiSend service performs server-side telemetry for this plugin and, if so, provide a working privacy-policy link before submission.
+   - Confirm that no code is intentionally obfuscated and that the plugin performs no automatic self-update or remote-code installation.
 6. **Release procedure**: Bring `manifest.json`, `package.json`, `versions.json`, `README.md` and release assets into agreement. Only then tag exactly `0.1.36`, attach the three runtime assets, and submit to the Obsidian Community Plugins catalog.
 
 ## Provenance
