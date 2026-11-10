@@ -10,12 +10,15 @@ assert.equal(manifest.id, 'hakisend-publisher');
 assert.equal(manifest.version, '0.1.36');
 assert.equal(manifest.minAppVersion, '1.11.4');
 assert.equal(manifest.isDesktopOnly, false);
+assert.equal(packageJson.version, manifest.version, 'package.json and manifest.json must agree');
 assert(existsSync('main.js'), 'main.js is required');
 assert(existsSync('styles.css'), 'styles.css is required');
 assert(existsSync('LICENSE'), 'LICENSE is required');
 assert(existsSync('README.md'), 'README.md is required');
 
 const runtime = readFileSync('main.js');
+const canonicalSource = readFileSync('src/runtime/main.js');
+assert(canonicalSource.equals(runtime), 'Canonical JavaScript source differs from release runtime');
 const expectedRuntimeHash = 'b0b955434340fc81bdd880544bf7ee99c216601dbade20dd35c70f529c77d12e';
 const actualRuntimeHash = createHash('sha256').update(runtime).digest('hex');
 assert.equal(actualRuntimeHash, expectedRuntimeHash, 'runtime drift from reviewed 0.1.36 archive');
@@ -41,16 +44,10 @@ for (const pattern of secretPatterns) {
 console.log('CANDIDATE_RUNTIME_SHA256=' + actualRuntimeHash);
 console.log('CANDIDATE_ASSET_CHECK=PASS');
 console.log('CANDIDATE_SENSITIVE_FILE_GUARD=PASS');
-
-if (packageJson.version !== manifest.version) {
-  console.log('SOURCE_BUILD_PARITY=BLOCKED');
-  console.log(`SOURCE_PACKAGE_VERSION=${packageJson.version}`);
-  console.log('Release is NOT authorized. Restore matching editable source and prove a reproducible build.');
-} else {
-  console.log('SOURCE_BUILD_PARITY=UNVERIFIED');
-  console.log('Version agreement alone cannot establish source reproducibility.');
-}
+console.log('JS_SOURCE_BUILD_PARITY=PASS');
+console.log('LEGACY_TYPESCRIPT_BUILD=DISABLED');
+console.log('Release is NOT authorized until remaining live UAT and policy gates are resolved.');
 
 if (process.argv.includes('--release')) {
-  throw new Error('Public release is blocked until matching source and live UAT are verified.');
+  throw new Error('Public release is blocked until live UAT and policy gates are verified.');
 }

@@ -26,6 +26,8 @@ jobs:
           node-version: '22'
       - name: Check JavaScript syntax
         run: node --check main.js
+      - name: Verify canonical JavaScript build
+        run: node scripts/build-from-js.mjs --verify
       - name: Check candidate provenance and manifest
         run: node scripts/check-candidate.mjs
       - name: Run runtime contract tests

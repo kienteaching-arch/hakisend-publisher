@@ -4,7 +4,7 @@ Publish Markdown notes from Obsidian to HakiSend.
 
 HakiSend Publisher connects an Obsidian vault to a HakiSend Site so you can write locally, save drafts, schedule Posts, and publish without copying Markdown into a browser editor.
 
-> **Release status:** This branch contains a **0.1.36 review candidate**, not an approved Community Plugins release. The earlier TypeScript sources do not reproduce its runtime bundle. Read [release readiness and blockers](RELEASE_CANDIDATE_0.1.36.md) before installing or redistributing it. The general Website authoring documentation below was written for the earlier public release; commands and capabilities in 0.1.36 also include Email workflows.
+> **Release status:** This branch contains a **0.1.36 review candidate**, not an approved Community Plugins release. Its canonical source is now JavaScript at `src/runtime/main.js`; the former TypeScript source is retained for historical reference and is not part of the build. Read [release readiness and blockers](RELEASE_CANDIDATE_0.1.36.md) before installing or redistributing it. The general Website authoring documentation below was written for the earlier public release; commands and capabilities in 0.1.36 also include Email workflows.
 
 ## Requirements
 
@@ -142,15 +142,17 @@ Do not copy another user's data.json or plugin connection state.
 
 ## Development
 
-For the original public source version, install dependencies:
-
-    npm install
-
-Build the production plugin:
+The canonical source for 0.1.36 is `src/runtime/main.js`. It is a readable JavaScript runtime snapshot from the UAT package; it includes bundled code and is not a restored modular TypeScript project. Use the following commands to copy that source to the Obsidian runtime entry point, and verify exact byte parity:
 
     npm run build
+    npm run verify-build
+    npm test
 
-**Important for candidate 0.1.36:** The repository's existing `src/main.ts` and `package.json` are from an earlier release. Running `npm run build` does **not** reproduce the checked-in 0.1.36 `main.js`. Do not distribute a newly built bundle as 0.1.36 until maintainable matching source and a verified build are restored.
+For edit-and-refresh development:
+
+    npm run dev
+
+The previous `src/main.ts` remains in the repository only as an earlier implementation reference. `esbuild.config.mjs` intentionally refuses to run, preventing an accidental rebuild that would overwrite the new runtime with old code. Future JavaScript changes must be made in `src/runtime/main.js`, followed by `npm run build` and tests. A modular source refactor can follow later without changing the shipped behavior.
 
 The candidate's frozen runtime checksum and non-mutating contract tests can be checked with:
 
@@ -160,7 +162,7 @@ The candidate's frozen runtime checksum and non-mutating contract tests can be c
 
 ## Releases
 
-For a public release, the plugin version must agree in manifest.json and package.json. The 0.1.36 candidate intentionally has a version mismatch and must not be released yet.
+For a public release, the plugin version must agree in manifest.json, package.json, and versions.json. Version metadata now agrees for 0.1.36, but live UAT and Obsidian policy acceptance gates in the release checklist are not yet complete.
 
 versions.json maps each plugin version to the minimum compatible Obsidian version.
 
