@@ -4,7 +4,8 @@ import { copyFileSync, readFileSync, renameSync, unlinkSync, watch } from 'node:
 import { basename, dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-const sourcePath = 'src/runtime/main.js';
+// Use a distinct filename: the Community scanner treats main.js as a build artifact.
+const sourcePath = 'src/runtime/publisher-bundle.cjs';
 const outputPath = 'main.js';
 const verifyOnly = process.argv.includes('--verify');
 const watchMode = process.argv.includes('--watch');

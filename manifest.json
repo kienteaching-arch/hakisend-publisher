@@ -1,9 +1,9 @@
 {
   "id": "hakisend-publisher",
   "name": "HakiSend Publisher",
-  "version": "0.1.41",
+  "version": "0.1.42",
   "minAppVersion": "1.11.4",
-  "description": "Publish Website Posts and Email from Obsidian with a native read-only content calendar.",
+  "description": "Publish website posts and emails to HakiSend, with a read-only content calendar.",
   "author": "HakiSend",
   "isDesktopOnly": false
 }

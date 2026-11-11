@@ -3,8 +3,7 @@ node_modules/
 
 # Compiled release artifact
 main.js
-# Keep the canonical JavaScript source trackable.
-!src/runtime/main.js
+# Canonical source: src/runtime/publisher-bundle.cjs (tracked).
 *.map
 
 # Obsidian local plugin state

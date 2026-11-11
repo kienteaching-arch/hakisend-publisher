@@ -1,6 +1,6 @@
 {
   "name": "hakisend-obsidian-publisher",
-  "version": "0.1.41",
+  "version": "0.1.42",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,6 @@
   },
   "devDependencies": {
     "@types/node": "latest",
-    "builtin-modules": "latest",
     "esbuild": "latest",
     "obsidian": "latest",
     "typescript": "latest"

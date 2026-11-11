@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const vm = require('node:vm');
 
-const source = readFileSync('src/runtime/main.js', 'utf8');
+const source = readFileSync('src/runtime/publisher-bundle.cjs', 'utf8');
 const normalizers = source.match(/function normalizeBaseUrl\(value\) \{[\s\S]*?\n\}\n[\s\S]*?function storedApiBaseUrl\(value\) \{[\s\S]*?\n\}/);
 assert(normalizers, 'Strict API-origin and persisted-settings guards must exist');
 
