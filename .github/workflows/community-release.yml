@@ -1,0 +1,100 @@
+name: Publish Obsidian Community release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - manifest.json
+      - .github/workflows/community-release.yml
+  workflow_dispatch:
+
+# A release can only be created from the owner repository's default branch.
+# The token cannot change repository settings, secrets, or other permissions.
+permissions:
+  contents: write
+
+concurrency:
+  group: obsidian-community-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'kienteaching-arch/hakisend-publisher' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact commit and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify committed release build
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run verify-build
+          npm test
+          npm run build
+          git diff --exit-code -- main.js
+
+      - name: Check release version and assets
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./manifest.json").version')"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test -s "RELEASE_NOTES_${version}.md"
+          for asset in main.js manifest.json styles.css; do
+            test -s "$asset"
+          done
+          test "$(node -p 'require("./package.json").version')" = "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          if gh release view "$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $version already exists; no duplicate release will be created."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
+            echo "::error::Tag $version exists without a release. Resolve manually before retrying."
+            exit 1
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+      # gh release create first stages the release as a draft, attaches each
+      # binary asset, then publishes it. Never publish the tag first: Obsidian
+      # scans published releases and expects every attachment to exist.
+      - name: Publish complete release
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$VERSION" \
+            main.js manifest.json styles.css \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "HakiSend Publisher $VERSION" \
+            --notes-file "RELEASE_NOTES_${VERSION}.md" \
+            --latest
+
+      - name: Verify published attachments
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = false
+          actual="$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
+          expected="$(printf '%s\n' main.js manifest.json styles.css | LC_ALL=C sort)"
+          test "$actual" = "$expected"
+          echo "COMMUNITY_RELEASE=PASS VERSION=$VERSION ASSETS=3"
