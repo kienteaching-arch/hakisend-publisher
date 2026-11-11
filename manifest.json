@@ -1,9 +1,9 @@
 {
   "id": "hakisend-publisher",
   "name": "HakiSend Publisher",
-  "version": "0.1.1",
+  "version": "0.1.41",
   "minAppVersion": "1.11.4",
-  "description": "Publish Markdown notes directly to HakiSend.",
+  "description": "Publish Website Posts and Email from Obsidian with a native read-only content calendar.",
   "author": "HakiSend",
   "isDesktopOnly": false
 }
