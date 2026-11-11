@@ -4,7 +4,7 @@ Publish Markdown notes from Obsidian to HakiSend.
 
 HakiSend Publisher connects an Obsidian vault to a HakiSend Site so you can write locally, save drafts, schedule Posts, and publish without copying Markdown into a browser editor.
 
-> **Release status:** 0.1.43 is a **Community directory review candidate**, not an approved update. It republishes the same security-hardened runtime and canonical bundled JavaScript source (`src/runtime/publisher-bundle.cjs`) used in the completed 0.1.42 branch preview. Its version is incremented to permit a fresh review with all three GitHub Release assets attached before publication. Website + Email and a one-recipient email send were verified on **0.1.40** in an isolated desktop test vault on 11 November 2026. HakiSend Sites 0.15.38 passed post-update and cross-Customer read-only authorization checks. Mobile behavior has not been verified.
+> **Release status:** 0.1.44 is a **local mobile UI improvement candidate**, not yet published or Community-approved. It builds on 0.1.43. The user verified one Email Only send on Android with 0.1.43 on 11 November 2026; that does not validate the changed 0.1.44 calendar and schedule screens. Before releasing, review the source diff, run the complete tests, upload matching `main.js`, `manifest.json`, and `styles.css` as GitHub Release assets, and perform on-device UAT.
 
 ## Requirements
 

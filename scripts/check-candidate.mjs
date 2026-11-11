@@ -6,7 +6,7 @@ const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
 
 assert.equal(manifest.id, 'hakisend-publisher');
-assert.equal(manifest.version, '0.1.43');
+assert.equal(manifest.version, '0.1.44');
 assert.equal(manifest.minAppVersion, '1.11.4');
 assert.equal(manifest.isDesktopOnly, false);
 assert.equal(packageJson.version, manifest.version, 'package.json and manifest.json must agree');
@@ -18,9 +18,9 @@ assert(existsSync('README.md'), 'README.md is required');
 const runtime = readFileSync('main.js');
 const canonicalSource = readFileSync('src/runtime/publisher-bundle.cjs');
 assert(canonicalSource.equals(runtime), 'Canonical JavaScript source differs from release runtime');
-const expectedRuntimeHash = '6ab70c1ffd0fabb9a8b29a51e97cbfbd34b2466a50182684b24d1351503e9df7';
+const expectedRuntimeHash = '54aea8d6731636996a4ef9426e3748052c1d6989655bd68ec7e9ab11e881d6af';
 const actualRuntimeHash = createHash('sha256').update(runtime).digest('hex');
-assert.equal(actualRuntimeHash, expectedRuntimeHash, 'runtime drift from security-hardened 0.1.41 candidate');
+assert.equal(actualRuntimeHash, expectedRuntimeHash, 'runtime drift from reviewed 0.1.44 mobile-calendar candidate');
 
 function walk(directory = '.', prefix = '') {
   const paths = [];

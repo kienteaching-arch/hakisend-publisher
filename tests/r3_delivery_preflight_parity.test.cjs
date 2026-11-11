@@ -22,7 +22,9 @@ test('both Obsidian delivery previews require every server-side preflight gate',
   for (const list of lists) {
     assert.deepEqual(list, serverRequired);
   }
-  assert.match(deliveryModal, /Cần xử lý: /);
+  assert.match(deliveryModal, /Vui lòng xử lý các mục sau rồi kiểm tra lại/);
+  assert.match(deliveryModal, /status\?\.state !== "pass"/);
+  assert.match(deliveryModal, /problems\.add\(help\[key\]\)/);
   assert.match(deliveryModal, /Check existing request \(read-only\)/);
   assert.match(deliveryModal, /await this\.recover\(prior\)/);
 });

@@ -4285,7 +4285,7 @@ var HakiSendNativeContentCalendarModal = class extends import_obsidian.Modal {
     this.sequence = 0;
   }
   onOpen() {
-    this.titleEl.setText("Content calendar");
+    this.titleEl.setText("Lịch nội dung");
     // Reuse the responsive, wide Post Calendar modal shell. Without this the
     // native content view inherits Obsidian's narrow default dialog width.
     this.modalEl.addClass("hks-post-calendar-modal");
@@ -4333,29 +4333,51 @@ var HakiSendNativeContentCalendarModal = class extends import_obsidian.Modal {
   render() {
     const root = this.contentEl;
     root.empty();
-    root.addClass("hks-post-calendar");
-    const controls = root.createDiv({ cls: "hks-post-calendar-controls" });
-    new import_obsidian.Setting(controls).setName("Site").addDropdown((d) => {
-      d.addOption("all", "All sites");
-      for (const site of this.plugin.settings.sites) d.addOption(site.uid, site.name);
-      d.setValue(this.siteFilter).onChange((value) => { this.siteFilter = value; void this.load(); });
-    }).addDropdown((d) => {
-      d.addOption("all", "Website + Email");
-      d.addOption("post", "Website");
-      d.addOption("email", "Email");
-      d.setValue(this.kindFilter).onChange((value) => { this.kindFilter = value; this.render(); });
-    }).addButton((b) => b.setButtonText("◀").setTooltip("Previous month").onClick(() => {
-      this.month = new Date(this.month.getFullYear(), this.month.getMonth() - 1, 1, 12);
-      this.selectedDay = hksCalendarDay(this.month); void this.load();
-    })).addButton((b) => b.setButtonText("Today").onClick(() => {
+    root.addClass("hks-post-calendar", "hks-native-content-calendar");
+    // Mobile Obsidian expands every Setting control to a full-width row. Keep
+    // filters and month navigation as explicit, accessible compact controls.
+    const filters = root.createDiv({ cls: "hks-native-calendar-filters" });
+    const siteLabel = filters.createEl("label", { cls: "hks-native-calendar-filter" });
+    siteLabel.createEl("span", { text: "Trang web" });
+    const siteSelect = siteLabel.createEl("select", { attr: { "aria-label": "Chọn trang web" } });
+    siteSelect.createEl("option", { text: "Tất cả trang", attr: { value: "all" } });
+    for (const site of this.plugin.settings.sites)
+      siteSelect.createEl("option", { text: site.name, attr: { value: site.uid } });
+    siteSelect.value = this.siteFilter;
+    siteSelect.addEventListener("change", () => { this.siteFilter = siteSelect.value; void this.load(); });
+    const kindLabel = filters.createEl("label", { cls: "hks-native-calendar-filter" });
+    kindLabel.createEl("span", { text: "Nội dung" });
+    const kindSelect = kindLabel.createEl("select", { attr: { "aria-label": "Lọc loại nội dung" } });
+    for (const [value, text] of [["all", "Website + Email"], ["post", "Website"], ["email", "Email"]])
+      kindSelect.createEl("option", { text, attr: { value } });
+    kindSelect.value = this.kindFilter;
+    kindSelect.addEventListener("change", () => { this.kindFilter = kindSelect.value; this.render(); });
+
+    const nav = root.createDiv({ cls: "hks-native-calendar-nav" });
+    const monthNav = nav.createDiv({ cls: "hks-native-calendar-month-nav" });
+    const moveMonth = (offset) => {
+      this.month = new Date(this.month.getFullYear(), this.month.getMonth() + offset, 1, 12);
+      this.selectedDay = hksCalendarDay(this.month);
+      void this.load();
+    };
+    const previous = monthNav.createEl("button", { cls: "hks-native-calendar-nav-button", text: "‹", attr: {
+      type: "button", "aria-label": "Tháng trước", title: "Tháng trước" } });
+    previous.addEventListener("click", () => moveMonth(-1));
+    monthNav.createEl("h3", { cls: "hks-native-calendar-month", text:
+      "Tháng " + (this.month.getMonth() + 1) + "/" + this.month.getFullYear() });
+    const next = monthNav.createEl("button", { cls: "hks-native-calendar-nav-button", text: "›", attr: {
+      type: "button", "aria-label": "Tháng sau", title: "Tháng sau" } });
+    next.addEventListener("click", () => moveMonth(1));
+    const actions = nav.createDiv({ cls: "hks-native-calendar-nav-actions" });
+    const todayButton = actions.createEl("button", { text: "Hôm nay", attr: { type: "button" } });
+    todayButton.addEventListener("click", () => {
       const today = new Date();
       this.month = new Date(today.getFullYear(), today.getMonth(), 1, 12);
-      this.selectedDay = hksCalendarDay(today); void this.load();
-    })).addButton((b) => b.setButtonText("▶").setTooltip("Next month").onClick(() => {
-      this.month = new Date(this.month.getFullYear(), this.month.getMonth() + 1, 1, 12);
-      this.selectedDay = hksCalendarDay(this.month); void this.load();
-    })).addButton((b) => b.setButtonText("Refresh").onClick(() => void this.load()));
-    root.createEl("h3", { text: this.month.toLocaleDateString("en-GB", { month: "long", year: "numeric" }) });
+      this.selectedDay = hksCalendarDay(today);
+      void this.load();
+    });
+    const refreshButton = actions.createEl("button", { text: "Tải lại", attr: { type: "button" } });
+    refreshButton.addEventListener("click", () => void this.load());
     if (this.loading) {
       root.createEl("p", { text: "Loading Calendar from HakiSend…" });
       return;
@@ -4399,8 +4421,8 @@ var HakiSendNativeContentCalendarModal = class extends import_obsidian.Modal {
       byDay.set(event.date, list);
     }
     for (const list of byDay.values()) list.sort((a, b) => a.time.localeCompare(b.time));
-    const grid = root.createDiv({ cls: "hks-post-calendar-grid" });
-    for (const day of ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+    const grid = root.createDiv({ cls: "hks-post-calendar-grid hks-native-calendar-grid" });
+    for (const day of ["T2", "T3", "T4", "T5", "T6", "T7", "CN"])
       grid.createEl("div", { cls: "hks-post-calendar-weekday", text: day });
     const start = hksCalendarRange(this.month).start;
     const todayKey = hksCalendarDay(new Date());
@@ -4413,8 +4435,9 @@ var HakiSendNativeContentCalendarModal = class extends import_obsidian.Modal {
       if (key === todayKey) classes.push("hks-post-calendar-today");
       if (key === this.selectedDay) classes.push("hks-post-calendar-selected");
       if (items.length) classes.push("hks-post-calendar-occupied");
-      const cell = grid.createEl("button", { cls: classes.join(" "), attr: {
-        type: "button", "aria-label": key + ", " + items.length + " server events" } });
+      const cell = grid.createEl("button", { cls: classes.join(" ") + " hks-native-calendar-day", attr: {
+        type: "button", "aria-pressed": String(key === this.selectedDay),
+        "aria-label": key + ", " + items.length + " sự kiện" } });
       cell.createEl("strong", { text: String(date.getDate()) });
       for (const event of items.slice(0, 2)) cell.createEl("span", { cls: "hks-post-calendar-event", text:
         event.time + " · " + (event.kind === "email" ? "Email" : "Web") + " · " + event.title });
@@ -4422,11 +4445,18 @@ var HakiSendNativeContentCalendarModal = class extends import_obsidian.Modal {
       cell.addEventListener("click", () => { this.selectedDay = key; this.render(); });
     }
     const details = root.createDiv({ cls: "hks-post-calendar-details" });
-    details.createEl("h4", { text: "Events · " + this.selectedDay });
+    details.addClass("hks-native-calendar-details");
+    details.createEl("h4", { text: "Nội dung ngày " + this.selectedDay.split("-").reverse().join("/") });
     const selected = byDay.get(this.selectedDay) || [];
-    if (!selected.length) details.createEl("p", { text: "No verified server events for this day." });
-    for (const event of selected) details.createEl("p", { text:
-      event.time + " · " + event.site.name + " · " + event.title + " · " + nativeContentCalendarLabel(event) });
+    if (!selected.length) details.createEl("p", { text: "Ngày này chưa có nội dung trên HakiSend." });
+    for (const event of selected) {
+      const row = details.createDiv({ cls: "hks-native-calendar-event-row" });
+      row.createEl("span", { cls: "hks-native-calendar-event-time", text: event.time });
+      const body = row.createDiv({ cls: "hks-native-calendar-event-body" });
+      body.createEl("span", { cls: "hks-native-calendar-event-kind", text: event.kind === "email" ? "Email" : "Website" });
+      body.createEl("strong", { text: event.title });
+      body.createEl("small", { text: event.site.name + " · " + nativeContentCalendarLabel(event) });
+    }
     const local = r3LocalCalendar(this.localDocuments, this.siteFilter, "all");
     const plans = local.entries.filter((item) => item.kind !== "facebook_page_post" &&
       (this.kindFilter === "all" || this.kindFilter === "post" && item.kind === "site_post" ||
@@ -4599,11 +4629,9 @@ var HakiSendR3NativeDeliveryModal = class extends import_obsidian.Modal {
             return;
           }
           area.createEl("p", { text: "Email: " + check.campaign.name + " · Số người nhận hợp lệ: " + String(count) });
-          const detail = area.createEl("details");
-          detail.createEl("summary", { text: "Xem kết quả kiểm tra kỹ thuật" });
-          for (const [key, value] of Object.entries(check.checks)) {
-            detail.createEl("p", { text: key + " · " + value.state + " · " + value.detail });
-          }
+          // The server's complete preflight still gates the operation. Its
+          // internal check names belong in the advanced inspector, not in the
+          // ordinary Email Only send/approval flow on mobile.
           const allowed = check.campaign.status === "new" && count !== null && count > 0 && required2.every((key) => {
             var _a;
             return ((_a = check.checks[key]) == null ? void 0 : _a.state) === "pass";
@@ -4622,13 +4650,27 @@ var HakiSendR3NativeDeliveryModal = class extends import_obsidian.Modal {
             return;
           }
           if (!allowed) {
-            area.createEl("strong", { text: "Email chưa đủ điều kiện gửi. Mở 'Xem kết quả kiểm tra kỹ thuật' để biết mục cần xử lý." });
+            area.createEl("strong", { text: "Email chưa đủ điều kiện gửi. Vui lòng xử lý các mục sau rồi kiểm tra lại." });
+            const help = {
+              site_audience: "Kiểm tra trang web và danh sách người nhận.",
+              native_state: "Email không còn ở trạng thái có thể gửi. Hãy kiểm tra trong HakiSend.",
+              source_content_integrity: "Nội dung email đã thay đổi. Hãy chuẩn bị email lại trước khi gửi.",
+              membership_guest_free_attestation: "Cần xác minh quyền truy cập nội dung trong HakiSend.",
+              campaign_permission: "Tài khoản chưa được cấp quyền gửi email này.",
+              native_setup: "Cần hoàn tất cấu hình email và người nhận trong HakiSend.",
+              sender: "Địa chỉ người gửi chưa được xác minh.",
+              unsubscribe: "Email còn thiếu thông tin hủy đăng ký bắt buộc.",
+              native_recipient_count: "Danh sách chưa có người nhận hợp lệ.",
+              credit: "Hãy kiểm tra hạn mức gửi email."
+            };
+            const problems = new Set();
+            if (check.campaign.status !== "new") problems.add(help.native_state);
+            if (count === null || count <= 0) problems.add(help.native_recipient_count);
             for (const key of required2) {
               const status = check.checks[key];
-              if (status?.state !== "pass") {
-                area.createEl("p", { text: "Cần xử lý: " + (status?.detail || key) });
-              }
+              if (status?.state !== "pass") problems.add(help[key]);
             }
+            for (const problem of problems) area.createEl("p", { text: "• " + problem });
             new import_obsidian.Setting(area).addButton((button) => button.setButtonText("Kiểm tra lại").onClick(inspectThisCampaign));
             return;
           }
@@ -4777,8 +4819,13 @@ var HakiSendR3NativeDeliveryModal = class extends import_obsidian.Modal {
       time2 = void 0;
       if (action === "schedule") {
         calendar.createEl("p", { text: "Chọn ngày và giờ gửi (muộn hơn hiện tại ít nhất 15 phút)." });
-        date = calendar.createEl("input", { attr: { type: "date" } });
-        time2 = calendar.createEl("input", { attr: { type: "time" } });
+        const inputs = calendar.createDiv({ cls: "hakisend-email-schedule-fields" });
+        const dateLabel = inputs.createEl("label", { cls: "hakisend-email-schedule-field" });
+        dateLabel.createEl("span", { text: "Ngày gửi" });
+        date = dateLabel.createEl("input", { attr: { type: "date", "aria-label": "Ngày gửi" } });
+        const timeLabel = inputs.createEl("label", { cls: "hakisend-email-schedule-field" });
+        timeLabel.createEl("span", { text: "Giờ gửi" });
+        time2 = timeLabel.createEl("input", { attr: { type: "time", "aria-label": "Giờ gửi" } });
         date.addEventListener("change", renderSummary);
         time2.addEventListener("change", renderSummary);
         new import_obsidian.Setting(calendar).setName("Múi giờ").addDropdown((d) => {

@@ -41,6 +41,31 @@
   }
 }
 
+/* Date and time are separate native mobile pickers; label each explicitly. */
+.hakisend-email-schedule-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .7rem;
+  margin: .7rem 0;
+}
+.hakisend-email-schedule-field {
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+  min-width: 0;
+  font-size: var(--font-ui-small);
+  font-weight: 650;
+}
+.hakisend-email-schedule-field input {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  color: var(--text-normal);
+  font-size: var(--font-ui-medium);
+}
+
 /* Post Calendar: one responsive surface in Schedule and the standalone command. */
 .hks-post-calendar-modal {
   width: min(1050px, calc(100vw - 28px)) !important;
@@ -161,6 +186,107 @@
 .hks-content-calendar-status li { overflow-wrap: anywhere; margin: .25rem 0; }
 .hks-content-calendar-error { border-color: var(--text-warning); }
 .hks-content-calendar-local summary { font-weight: 600; cursor: pointer; }
+
+/* Native Content Calendar: compact, labeled navigation instead of Obsidian
+   Setting controls, which become six full-width rows on mobile. */
+.hks-native-calendar-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .65rem;
+  margin: .3rem 0 .7rem;
+}
+.hks-native-calendar-filter {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: .35rem;
+  font-size: var(--font-ui-small);
+  font-weight: 650;
+}
+.hks-native-calendar-filter select {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  font-size: var(--font-ui-small);
+  text-overflow: ellipsis;
+}
+.hks-native-calendar-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .55rem;
+  margin: .45rem 0 1rem;
+}
+.hks-native-calendar-month-nav {
+  display: grid;
+  grid-template-columns: 44px minmax(130px, 1fr) 44px;
+  align-items: center;
+  gap: .35rem;
+  flex: 1 1 230px;
+  min-width: 0;
+}
+.hks-native-content-calendar .hks-native-calendar-month {
+  margin: 0;
+  text-align: center;
+  font-size: var(--font-ui-medium);
+  white-space: nowrap;
+}
+.hks-native-content-calendar .hks-native-calendar-nav-button {
+  box-sizing: border-box;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+.hks-native-calendar-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+}
+.hks-native-calendar-nav-actions button { min-height: 44px; }
+.hks-native-content-calendar .hks-native-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  width: 100%;
+  margin-bottom: .7rem;
+}
+.hks-native-content-calendar .hks-native-calendar-day {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  cursor: pointer;
+}
+.hks-native-calendar-event-row {
+  display: grid;
+  grid-template-columns: 3.4rem minmax(0, 1fr);
+  gap: .65rem;
+  padding: .65rem 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.hks-native-calendar-event-time {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-variant-numeric: tabular-nums;
+}
+.hks-native-calendar-event-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .3rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.hks-native-calendar-event-body strong { font-size: var(--font-ui-medium); }
+.hks-native-calendar-event-body small { color: var(--text-muted); }
+.hks-native-calendar-event-kind {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-accent);
+  font-weight: 750;
+}
 @media (max-width: 680px) {
   .hks-post-calendar-day { min-height: 58px; padding: .35rem .25rem; }
   .hks-post-calendar-event { display: none; }
@@ -169,6 +295,18 @@
     background: var(--interactive-accent); margin: .15rem auto;
   }
   .hks-post-calendar-grid { gap: 1px; }
+  .hks-native-calendar-nav { flex-direction: column; align-items: stretch; }
+  .hks-native-calendar-month-nav { flex: 0 0 auto; }
+  .hks-native-calendar-nav-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hks-native-calendar-nav-actions button { width: 100%; }
+  .hks-native-content-calendar .hks-native-calendar-day {
+    min-height: 45px;
+    padding: .35rem .15rem;
+    text-align: center;
+    align-items: center;
+  }
+  .hks-native-content-calendar .hks-post-calendar-weekday { padding: .4rem .1rem; }
+  .hks-native-calendar-event-row { grid-template-columns: 3rem minmax(0, 1fr); }
 }
 .hks-post-calendar-event.hks-facebook-calendar-chip {
   background: color-mix(in srgb, #2784ee 22%, var(--background-primary));
