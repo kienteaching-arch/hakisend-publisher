@@ -6,7 +6,7 @@ const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
 
 assert.equal(manifest.id, 'hakisend-publisher');
-assert.equal(manifest.version, '0.1.42');
+assert.equal(manifest.version, '0.1.43');
 assert.equal(manifest.minAppVersion, '1.11.4');
 assert.equal(manifest.isDesktopOnly, false);
 assert.equal(packageJson.version, manifest.version, 'package.json and manifest.json must agree');
