@@ -1,4 +1,12 @@
-/* HakiSend Publisher v0.1.0 */
+/* HakiSend Publisher v0.1.17 */
+/* Standalone Email Only: preserve the YAML metadata for HakiSend, but show
+   novice authors the human-readable status in the note instead. This class
+   is applied only to authorized HakiSend Email note views and can be toggled
+   with the HakiSend technical-properties command. */
+.hakisend-email-simple .metadata-container {
+  display: none !important;
+}
+
 .hakisend-publisher-note {
   font-size: var(--font-ui-small);
   color: var(--text-muted);
@@ -11,3 +19,143 @@
   border-radius: var(--radius-s);
   font-size: var(--font-ui-small);
 }
+
+/* The final send approval is the primary action, at the bottom of the wizard. */
+.hakisend-email-confirm {
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: 0.9rem;
+  padding-top: 0.55rem;
+}
+
+.hakisend-email-confirm .setting-item-control button.mod-cta {
+  min-height: 42px;
+  min-width: 210px;
+  padding: 0.55rem 1.2rem;
+  font-weight: 700;
+}
+
+@media (max-width: 600px) {
+  .hakisend-email-confirm .setting-item-control,
+  .hakisend-email-confirm .setting-item-control button.mod-cta {
+    width: 100%;
+  }
+}
+
+/* Post Calendar: one responsive surface in Schedule and the standalone command. */
+.hks-post-calendar-modal {
+  width: min(1050px, calc(100vw - 28px)) !important;
+  max-width: 1050px !important;
+  max-height: 92vh !important;
+}
+.hks-post-calendar { margin: 1rem 0; color: var(--text-normal); }
+.hks-post-calendar h3, .hks-post-calendar h4 { margin: .75rem 0; }
+.hks-post-calendar-controls .setting-item { display: flex; flex-wrap: wrap; gap: .4rem; }
+.hks-post-calendar-controls .setting-item-control { display: flex; flex-wrap: wrap; gap: .4rem; }
+.hks-post-calendar-month { font-size: 1.12rem; }
+.hks-post-calendar-summaries {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: .55rem; margin: .8rem 0;
+}
+.hks-post-calendar-summary {
+  display: flex; flex-direction: column; gap: .3rem; padding: .7rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m); background: var(--background-secondary);
+  font-size: var(--font-ui-small);
+}
+.hks-post-calendar-summary strong { color: var(--text-normal); }
+.hks-post-calendar-summary span { color: var(--text-muted); }
+.hks-post-calendar-focused { border-color: var(--interactive-accent); }
+.hks-post-calendar-grid {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px; background: var(--background-modifier-border);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m); overflow: hidden;
+}
+.hks-post-calendar-weekday {
+  background: var(--background-secondary); padding: .55rem .25rem;
+  text-align: center; font-weight: 700; color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+.hks-post-calendar-day {
+  position: relative; min-width: 0; min-height: 88px;
+  display: flex; flex-direction: column; align-items: stretch; gap: .2rem;
+  padding: .45rem; background: var(--background-primary);
+  border: 0; border-radius: 0; text-align: left; box-shadow: none;
+  font-size: var(--font-ui-smaller); color: var(--text-normal);
+}
+.hks-post-calendar-day:not(:disabled):hover, .hks-post-calendar-day:focus-visible {
+  background: var(--background-modifier-hover); box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+.hks-post-calendar-day strong { font-size: var(--font-ui-small); }
+.hks-post-calendar-outside { opacity: .55; }
+.hks-post-calendar-day.hks-post-calendar-today {
+  background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary));
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+.hks-post-calendar-today strong {
+  color: var(--text-accent); font-weight: 800;
+}
+.hks-post-calendar-today-label {
+  width: fit-content; padding: .08rem .28rem; border-radius: var(--radius-s);
+  color: var(--text-on-accent); background: var(--interactive-accent);
+  font-size: .68rem; line-height: 1.3; font-weight: 700;
+}
+.hks-post-calendar-selected { box-shadow: inset 0 0 0 2px var(--interactive-accent); }
+.hks-post-calendar-occupied { background: var(--background-secondary-alt); }
+.hks-post-calendar-day.hks-post-calendar-past {
+  color: var(--text-faint); opacity: .44; cursor: not-allowed;
+}
+.hks-post-calendar-day.hks-post-calendar-past:focus-visible {
+  box-shadow: none;
+}
+.hks-post-calendar-event {
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  padding: .16rem .3rem; border-radius: var(--radius-s);
+  background: var(--interactive-accent); color: var(--text-on-accent);
+}
+.hks-post-calendar-event-action { cursor: pointer; }
+.hks-post-calendar-event-action:hover { filter: brightness(1.13); text-decoration: underline; }
+.hks-post-calendar-more { color: var(--text-accent); font-weight: 600; }
+.hks-post-calendar-details {
+  margin: .9rem 0; padding: .85rem; background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m);
+}
+.hks-post-calendar-details p { margin: .45rem 0; overflow-wrap: anywhere; }
+.hks-post-calendar-detail-action {
+  display: block; width: 100%; text-align: left; margin: .4rem 0; padding: .5rem .65rem;
+  white-space: normal; height: auto; color: var(--text-normal);
+  background: var(--background-primary); border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s); overflow-wrap: anywhere;
+}
+.hks-post-calendar-detail-action:hover,
+.hks-post-calendar-detail-action:focus-visible {
+  border-color: var(--interactive-accent); background: var(--background-modifier-hover);
+}
+.hks-post-calendar-actions {
+  position: sticky; bottom: 0; z-index: 5;
+  background: var(--background-primary);
+  border-top: 1px solid var(--background-modifier-border);
+  padding: .7rem 0;
+}
+.hks-post-calendar-warning, .hks-post-calendar-notice {
+  padding: .7rem .9rem; border-radius: var(--radius-m);
+  border: 1px solid var(--text-warning); background: var(--background-secondary);
+}
+.hks-post-calendar-notice { border-color: var(--background-modifier-border); }
+@media (max-width: 680px) {
+  .hks-post-calendar-day { min-height: 58px; padding: .35rem .25rem; }
+  .hks-post-calendar-event { display: none; }
+  .hks-post-calendar-occupied::after {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--interactive-accent); margin: .15rem auto;
+  }
+  .hks-post-calendar-grid { gap: 1px; }
+}
+.hks-post-calendar-event.hks-facebook-calendar-chip {
+  background: color-mix(in srgb, #2784ee 22%, var(--background-primary));
+  border-left: 3px solid #2784ee;
+  color: var(--text-normal);
+}
+.hks-facebook-composer-modal { max-width: min(820px, 95vw); }
+.hks-facebook-composer-modal textarea { min-height: 100px; width: min(480px, 100%); }
+.hks-facebook-composer-modal .setting-item-description { white-space: pre-wrap; }

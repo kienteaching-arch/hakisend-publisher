@@ -1,11 +1,13 @@
 {
   "name": "hakisend-obsidian-publisher",
-  "version": "0.1.1",
+  "version": "0.1.36",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node esbuild.config.mjs production",
-    "dev": "node esbuild.config.mjs"
+    "build": "node scripts/build-from-js.mjs",
+    "dev": "node scripts/build-from-js.mjs --watch",
+    "verify-build": "node scripts/build-from-js.mjs --verify",
+    "test": "node --check main.js && node scripts/check-candidate.mjs && node --test tests/*.test.cjs"
   },
   "devDependencies": {
     "@types/node": "latest",

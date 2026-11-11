@@ -4,18 +4,25 @@ Publish Markdown notes from Obsidian to HakiSend.
 
 HakiSend Publisher connects an Obsidian vault to a HakiSend Site so you can write locally, save drafts, schedule Posts, and publish without copying Markdown into a browser editor.
 
+> **Release status:** This branch contains a **0.1.36 review candidate**, not an approved Community Plugins release. Its canonical source is now JavaScript at `src/runtime/main.js`; the former TypeScript source is retained for historical reference and is not part of the build. Read [release readiness and blockers](RELEASE_CANDIDATE_0.1.36.md) before installing or redistributing it. The general Website authoring documentation below was written for the earlier public release; commands and capabilities in 0.1.36 also include Email workflows.
+
 ## Requirements
 
 - Obsidian 1.11.4 or later.
 - A HakiSend account.
 - Access to at least one HakiSend Site.
 - An internet connection for HakiSend operations.
+- Some HakiSend features may depend on the service plan associated with your account.
 
 ## Account and network access
 
 HakiSend Publisher requires a HakiSend account for publishing features.
 
 When you connect, save, upload media, schedule, publish, or disconnect, the plugin communicates with the HakiSend API over the network.
+
+Email drafting, campaign preparation, and explicit Send/Schedule actions also communicate with HakiSend's server. The plugin may open the HakiSend Website + Email Calendar in a browser; the server calendar is not currently displayed as one native Obsidian calendar grid.
+
+Creating new Facebook publishing operations is disabled in candidate 0.1.36; saved historical plan data is preserved. No new Facebook API posting is provided by this candidate.
 
 Your Markdown source remains in your Obsidian vault. Publishing operations send the content and metadata required for the requested HakiSend operation.
 
@@ -133,21 +140,33 @@ Restart Obsidian or reload Community plugins, then enable HakiSend Publisher und
 
 Do not copy another user's data.json or plugin connection state.
 
+### KIENVU test vault UAT
+
+For the 0.1.36 review candidate, use the [test-vault-only UAT instructions](docs/UAT_KIENVU_0.1.36.md) and `scripts/uat-install-kienvu-test-vault.sh`. This script defaults to a read-only preflight and requires an explicit `--install` argument to update the test vault. It does not install into the KIENOS vault.
+
 ## Development
 
-Install dependencies:
-
-    npm install
-
-Build the production plugin:
+The canonical source for 0.1.36 is `src/runtime/main.js`. It is a readable JavaScript runtime snapshot from the UAT package; it includes bundled code and is not a restored modular TypeScript project. Use the following commands to copy that source to the Obsidian runtime entry point, and verify exact byte parity:
 
     npm run build
+    npm run verify-build
+    npm test
 
-The production build creates main.js from src/main.ts.
+For edit-and-refresh development:
+
+    npm run dev
+
+The previous `src/main.ts` remains in the repository only as an earlier implementation reference. `esbuild.config.mjs` intentionally refuses to run, preventing an accidental rebuild that would overwrite the new runtime with old code. Future JavaScript changes must be made in `src/runtime/main.js`, followed by `npm run build` and tests. A modular source refactor can follow later without changing the shipped behavior.
+
+The candidate's frozen runtime checksum and non-mutating contract tests can be checked with:
+
+    node --check main.js
+    node scripts/check-candidate.mjs
+    node --test tests/*.test.cjs
 
 ## Releases
 
-The plugin version is defined in manifest.json and package.json.
+For a public release, the plugin version must agree in manifest.json, package.json, and versions.json. Version metadata now agrees for 0.1.36, but live UAT and Obsidian policy acceptance gates in the release checklist are not yet complete.
 
 versions.json maps each plugin version to the minimum compatible Obsidian version.
 

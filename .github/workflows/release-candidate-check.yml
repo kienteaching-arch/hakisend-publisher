@@ -1,0 +1,43 @@
+name: Obsidian Publisher release candidate checks
+
+on:
+  push:
+    branches:
+      - 'release/**'
+  pull_request:
+    paths:
+      - 'main.js'
+      - 'manifest.json'
+      - 'styles.css'
+      - 'src/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'RELEASE_CANDIDATE_0.1.36.md'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'versions.json'
+      - '.github/workflows/release-candidate-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check JavaScript syntax
+        run: node --check main.js
+      - name: Check UAT installer syntax
+        run: bash -n scripts/uat-install-kienvu-test-vault.sh
+      - name: Verify canonical JavaScript build
+        run: node scripts/build-from-js.mjs --verify
+      - name: Check candidate provenance and manifest
+        run: node scripts/check-candidate.mjs
+      - name: Run runtime contract tests
+        run: node --test tests/*.test.cjs
