@@ -10,11 +10,11 @@
 - Chỉ một Email List trong Plan mới; Plan cũ vẫn giữ nguyên file.
 - Phần email Post Notice vẫn phải được kiểm tra guest Free trên server trước khi gửi.
 
-## Cài trên KIENVU
+## Cài UAT trên KIENVU
 
-Giải nén ZIP vào một thư mục riêng (không giải nén đè thư mục bản cũ) và chạy `bash INSTALL_KIENVU.sh` từ thư mục giải nén. Script kiểm tra cả hai Vault, backup `main.js`, `manifest.json`, `styles.css`, không động đến `data.json`, không SSH hoặc thay đổi VPS. Nếu phiên bản trên máy đã khác 0.1.34/0.1.35/0.1.36 thì script **dừng**.
+Gói nội bộ ban đầu có script `INSTALL_KIENVU.sh` cập nhật **cả hai vault**. Để kiểm thử phiên bản chuẩn bị phát hành Community, **không dùng lại script đó**. Gói UAT mới có script `scripts/uat-install-kienvu-test-vault.sh`, chỉ nhắm vault **HakiSend-Test**; chạy `--preflight` trước, sau đó mới cân nhắc `--install`. Script lưu backup 3 tệp runtime và không sửa `data.json`, không SSH hoặc thay đổi VPS.
 
-Reload Obsidian/Community Plugin sau khi cài.
+Xem [checklist UAT và cách cài an toàn](UAT_KIENVU_0.1.36.md). Reload Obsidian/Community Plugin sau khi cài.
 
 ## Chưa coi là bản phát hành Community mới
 

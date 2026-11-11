@@ -22,6 +22,8 @@ The plugin connects to the user's HakiSend account and sends the user's selected
 
 These checks do **not** prove full end-to-end behavior against a live HakiSend server, mobile compatibility, or an Obsidian review approval.
 
+The [KIENVU test-vault UAT checklist](docs/UAT_KIENVU_0.1.36.md) and its safe installer are included for owner-operated desktop checks. Their availability does **not** mean installation or live UAT has already happened.
+
 ## Open gates before a public GitHub release
 
 1. **JavaScript source quality**: The canonical source now exists and reproduces the runtime byte-for-byte. It is a preserved compiled JavaScript bundle, not reconstituted modular TypeScript. The old `src/main.ts` must stay explicitly non-authoritative and must not overwrite the 0.1.36 build; review code readability and long-term editability.

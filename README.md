@@ -140,6 +140,10 @@ Restart Obsidian or reload Community plugins, then enable HakiSend Publisher und
 
 Do not copy another user's data.json or plugin connection state.
 
+### KIENVU test vault UAT
+
+For the 0.1.36 review candidate, use the [test-vault-only UAT instructions](docs/UAT_KIENVU_0.1.36.md) and `scripts/uat-install-kienvu-test-vault.sh`. This script defaults to a read-only preflight and requires an explicit `--install` argument to update the test vault. It does not install into the KIENOS vault.
+
 ## Development
 
 The canonical source for 0.1.36 is `src/runtime/main.js`. It is a readable JavaScript runtime snapshot from the UAT package; it includes bundled code and is not a restored modular TypeScript project. Use the following commands to copy that source to the Obsidian runtime entry point, and verify exact byte parity:

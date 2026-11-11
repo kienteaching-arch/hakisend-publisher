@@ -9,8 +9,15 @@ on:
       - 'main.js'
       - 'manifest.json'
       - 'styles.css'
+      - 'src/**'
       - 'scripts/**'
       - 'tests/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'RELEASE_CANDIDATE_0.1.36.md'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'versions.json'
       - '.github/workflows/release-candidate-check.yml'
 
 permissions:
@@ -26,6 +33,8 @@ jobs:
           node-version: '22'
       - name: Check JavaScript syntax
         run: node --check main.js
+      - name: Check UAT installer syntax
+        run: bash -n scripts/uat-install-kienvu-test-vault.sh
       - name: Verify canonical JavaScript build
         run: node scripts/build-from-js.mjs --verify
       - name: Check candidate provenance and manifest
