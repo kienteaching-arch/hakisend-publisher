@@ -6,7 +6,7 @@ const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
 
 assert.equal(manifest.id, 'hakisend-publisher');
-assert.match(manifest.version, /^\\d+\\.\\d+\\.\\d+$/, 'manifest version must use X.Y.Z');
+assert.match(manifest.version, /^\d+\.\d+\.\d+$/, 'manifest version must use X.Y.Z');
 const versions = JSON.parse(readFileSync('versions.json', 'utf8'));
 assert.equal(versions[manifest.version], manifest.minAppVersion, 'versions.json must include current version');
 const lockfile = JSON.parse(readFileSync('package-lock.json', 'utf8'));
