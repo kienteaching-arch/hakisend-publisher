@@ -1,9 +1,9 @@
 {
-  "id": "hakisend-publisher",
-  "name": "HakiSend Publisher",
-  "version": "0.1.45",
-  "minAppVersion": "1.11.4",
-  "description": "Publish website posts and emails to HakiSend, with a read-only content calendar.",
-  "author": "HakiSend",
-  "isDesktopOnly": false
+    "id": "hakisend-publisher",
+    "name": "HakiSend Publisher",
+    "version": "0.1.45",
+    "minAppVersion": "1.11.4",
+    "description": "Publish website posts and emails to HakiSend, with a read-only content calendar.",
+    "author": "HakiSend",
+    "isDesktopOnly": false
 }
