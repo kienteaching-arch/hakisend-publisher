@@ -299,13 +299,38 @@
   .hks-native-calendar-month-nav { flex: 0 0 auto; }
   .hks-native-calendar-nav-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hks-native-calendar-nav-actions button { width: 100%; }
+  /* The native month always renders six week rows (42 dates).
+     Obsidian mobile themes can stretch button tracks while the grid clips
+     overflow, hiding the final weeks. Size every track explicitly and let
+     the outer modal scroll instead of clipping any calendar dates. */
+  .hks-native-content-calendar .hks-native-calendar-grid {
+    grid-template-rows: 40px repeat(6, 46px);
+    grid-auto-rows: 46px;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    align-content: start;
+  }
   .hks-native-content-calendar .hks-native-calendar-day {
-    min-height: 45px;
-    padding: .35rem .15rem;
+    box-sizing: border-box;
+    height: 46px;
+    min-height: 46px;
+    max-height: 46px;
+    overflow: hidden;
+    padding: .3rem .15rem;
     text-align: center;
     align-items: center;
+    justify-content: center;
   }
-  .hks-native-content-calendar .hks-post-calendar-weekday { padding: .4rem .1rem; }
+  .hks-native-content-calendar .hks-post-calendar-weekday {
+    box-sizing: border-box;
+    height: 40px;
+    min-height: 40px;
+    padding: .35rem .1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
   .hks-native-calendar-event-row { grid-template-columns: 3rem minmax(0, 1fr); }
 }
 .hks-post-calendar-event.hks-facebook-calendar-chip {
