@@ -1,43 +1,70 @@
 # HakiSend Publisher
 
-Publish Markdown notes from Obsidian to HakiSend.
+**Write in Obsidian. Publish to your HakiSend websites and email audiences.**
 
-HakiSend Publisher connects an Obsidian vault to a HakiSend Site so you can write locally, save drafts, schedule Posts, and publish without copying Markdown into a browser editor.
+HakiSend Publisher helps creators, writers, and businesses prepare content in Markdown, keep their notes in Obsidian, and send the finished work to HakiSend when they choose.
 
-> **Release status:** 0.1.44 is a **local mobile UI improvement candidate**, not yet published or Community-approved. It builds on 0.1.43. The user verified one Email Only send on Android with 0.1.43 on 11 November 2026; that does not validate the changed 0.1.44 calendar and schedule screens. Before releasing, review the source diff, run the complete tests, upload matching `main.js`, `manifest.json`, and `styles.css` as GitHub Release assets, and perform on-device UAT.
+## What you can do
 
-## Requirements
+- **Publish website posts:** Write locally, choose a HakiSend Site and category, edit the title, excerpt, tags and other post properties, then save, publish or schedule.
+- **Create Email Only campaigns:** Draft an email independently of a website post, choose recipients and send immediately or schedule it.
+- **Turn published posts into emails:** Prepare email content from an existing published post.
+- **See your content calendar:** View website and email activity across HakiSend Sites in one read-only calendar, with a mobile-friendly layout.
+- **Use images from your notes:** Supported local Markdown images are uploaded to HakiSend Media as part of the save workflow.
+- **Work on desktop or mobile:** Use the same Obsidian Command Palette actions on supported devices.
 
-- Obsidian 1.11.4 or later.
-- A HakiSend account.
-- Access to at least one HakiSend Site.
-- An internet connection for HakiSend operations.
-- Some HakiSend features require a paid service plan. An account is required for publishing and email operations.
+**You stay in control.** Creating a note or editing a draft does not automatically publish a post or send an email. Publishing and sending require explicit actions.
 
-## Account and network access
+## Install
 
-HakiSend Publisher requires a HakiSend account for publishing features.
+1. Open **Obsidian → Settings → Community plugins**.
+2. Select **Browse** and search for **HakiSend Publisher**.
+3. Select **Install**, then **Enable**.
+4. Open **Settings → HakiSend Publisher**, and connect your HakiSend account through your browser.
 
-When you connect, save, upload media, schedule, publish, or disconnect, the plugin communicates with the HakiSend API over HTTPS (default `https://app.hakisend.com`; your configured HakiSend endpoint may differ). Custom API URLs must be valid HTTPS origins without paths, queries or credentials. Invalid saved URLs remain visible for correction, but block authenticated API requests. The server receives the content, attachments and metadata needed for the action you explicitly request.
+### Requirements
 
-OAuth connection secrets use Obsidian Secret Storage. Tokens saved by older versions in the plain `bearerToken` setting are **never used for API requests** in 0.1.41: reconnect via the browser to replace the old credential, then revoke it in HakiSend if applicable. Never share your vault's local `data.json` or export an access token when requesting support. This plugin does not include client-side telemetry or ads.
+- Obsidian **1.11.4** or later.
+- A HakiSend account with access to at least one HakiSend Site.
+- Internet access when communicating with HakiSend.
 
-Email drafting, campaign preparation, and explicit Send/Schedule actions also communicate with HakiSend's server. The **Content calendar (Website + Email)** opens inside Obsidian and uses a read-only API to show server-confirmed Website dates and native Acelle Email Campaign statuses. It was verified with HakiSend PublisherEmail 0.6.28. If the selected server does not support this contract, the UI explicitly warns that Email Calendar is unavailable and falls back to Website dates. Local plans are never labeled as sent or published. A native Campaign status of `done` is not a guarantee that a message reached the recipient's Inbox.
+The plugin itself is free. Some operations may require an eligible HakiSend service plan.
 
-Creating new Facebook publishing operations is disabled in 0.1.41; saved historical plan data is preserved. No new Facebook API posting is provided by this version.
+## Get started: publish a website post
 
-Your Markdown source remains in your Obsidian vault. Publishing operations send the content and metadata required for the requested HakiSend operation.
+1. Open the **Command Palette** in Obsidian and search for **HakiSend Publisher**.
+2. Select **New website post**, choose a folder, and enter a title.
+3. Write your content in the new Markdown note.
+4. Use **Edit post details** (or **Edit post properties**, depending on the displayed command version) to review the category, tags, excerpt and URL settings.
+5. Select **Save post** to save a draft to HakiSend.
+6. When ready, choose **Publish post now** or **Schedule post**.
 
-## Commands
+Saving a draft and publishing a website are separate actions.
 
-Open the Obsidian Command Palette and search for **HakiSend Publisher**. Obsidian supplies the plugin name, so commands no longer repeat the “HakiSend” prefix.
+## Get started: create an Email Only message
 
-The default command list is deliberately limited to ten end-user actions:
+1. Open a regular Markdown note outside the **HakiSend Emails** folder.
+2. Open the Command Palette and select **Email — create or continue**.
+3. Choose the destination Site and follow the prompts to create an Email Only draft.
+4. Write and review the email, choose the audience, and complete the send confirmation.
+5. Choose **Send now** or **Schedule** when the email is ready.
+
+If an existing HakiSend email draft is already open, the same command continues that email instead of creating a new one.
+
+## View the content calendar
+
+Open **Content calendar (Website + Email)** from the Command Palette. Choose a Site and channel, move between months, and select a date to see its activity.
+
+The calendar is **read-only**. It shows server-confirmed events when supported by the connected HakiSend service; it does not send email or publish posts.
+
+## Available commands
+
+Open the Command Palette and search for **HakiSend Publisher**. The standard commands include:
 
 - Connect account
 - New website post
 - Choose site for note
-- Edit post details
+- Edit post details / properties
 - Save post
 - Publish post now
 - Schedule post
@@ -45,147 +72,23 @@ The default command list is deliberately limited to ten end-user actions:
 - Email — create or continue
 - Content calendar (Website + Email)
 
-Experimental contract probes, diagnostics and low-level recovery commands are hidden by default. They remain available for technical support through **Settings → HakiSend Publisher → Lệnh kỹ thuật nâng cao**, followed by a plugin restart.
+Some command labels may vary slightly with the installed version.
 
-Connection controls are available in the HakiSend Publisher settings.
+## Privacy and connection
 
-## New Post
+Your source Markdown files remain in your Obsidian vault. When you explicitly save, publish, upload media, send or schedule through HakiSend, the plugin transfers the content and information required for that action to your connected HakiSend service over HTTPS.
 
-HakiSend: New Post creates a local Markdown draft before anything is sent to HakiSend.
+Account connections use Obsidian Secret Storage. The plugin does not add client-side advertising or telemetry. See [Technical reference](docs/README_technical_reference_0.1.44.md) for network behavior, security details and development notes.
 
-A new Post begins with Properties similar to:
+## Troubleshooting and support
 
-    ---
-    title: My Post
-    status: draft
-    category: business
-    external_id: 00000000-0000-4000-8000-000000000000
-    ---
+- **Can't connect:** Open the plugin settings and reconnect your HakiSend account in the browser.
+- **A Site is missing:** Check that your HakiSend account has access to that Site.
+- **Can't send or publish:** Review the message shown by the plugin. It will not bypass permission or delivery checks.
+- **A command is missing:** Use the Command Palette search and confirm that the plugin is enabled.
 
-The UUID above is only an example.
-
-The real external_id is generated once and provides the stable identity between the Obsidian note and its HakiSend Post.
-
-Renaming the file, moving it to another folder, or changing its title does not require a new external_id.
-
-## Edit Post Properties
-
-HakiSend: Edit Post Properties manages:
-
-- title
-- slug
-- Category
-- Tags
-- excerpt
-
-It does not regenerate external_id.
-
-## Categories
-
-The selected HakiSend Category is stored explicitly in the note Properties.
-
-Moving the Markdown file to another folder therefore does not silently change its HakiSend Category.
-
-## Tags
-
-Tags are synchronized to HakiSend when the Post is saved.
-
-HakiSend may create Tags required by the Post during the Save workflow.
-
-## Site language
-
-The current Post publishing workflow uses the default locale configured for the selected HakiSend Site.
-
-Translation publishing is not currently exposed through HakiSend Publisher.
-
-## Save Changes
-
-HakiSend: Save Changes creates or updates the current Post in HakiSend.
-
-Saving does not create a new Site publication.
-
-A draft may be saved even when its Markdown body is still empty.
-
-## Schedule
-
-HakiSend: Schedule saves the Post and then performs the HakiSend publication operation required for the schedule.
-
-Local scheduling Properties are committed only after the server operation succeeds.
-
-## Publish Now
-
-HakiSend: Publish Now saves the current Post and publishes the resulting Site state.
-
-Local publishing Properties are committed only after the publication succeeds.
-
-Publish Now also clears obsolete schedule values that would conflict with an immediate publication.
-
-## Images
-
-Supported local Markdown image references can be uploaded through HakiSend Media during the Save workflow.
-
-The published Markdown then references the resulting HakiSend Media asset.
-
-## Errors
-
-When an API request fails, the plugin displays the HTTP/API error in Obsidian.
-
-When supplied by HakiSend, the request ID is also displayed so the server-side request can be traced.
-
-## Manual installation
-
-Create this directory inside your Obsidian vault:
-
-    <Vault>/.obsidian/plugins/hakisend-publisher/
-
-Place these release files inside it:
-
-    manifest.json
-    main.js
-    styles.css
-
-Restart Obsidian or reload Community plugins, then enable HakiSend Publisher under Settings → Community plugins.
-
-Do not copy another user's data.json or plugin connection state.
-
-## Development
-
-The canonical source for 0.1.41 is `src/runtime/main.js`. It is a maintained, readable JavaScript runtime bundle with the relevant module names and comments; it has not yet been refactored into independent TypeScript modules. Use the following commands to copy that source to the Obsidian runtime entry point and verify exact byte parity:
-
-    npm run build
-    npm run verify-build
-    npm test
-
-For edit-and-refresh development:
-
-    npm run dev
-
-Future JavaScript changes should be made in `src/runtime/main.js`, followed by `npm run build` and tests. The GitHub release asset `main.js` must match this build byte-for-byte. A modular source refactor can follow later without changing behavior.
-
-The release's frozen runtime checksum and non-mutating contract tests can be checked with:
-
-    node --check main.js
-    node scripts/check-candidate.mjs
-    node --test tests/*.test.cjs
-
-## Releases
-
-For a public release, the plugin version must agree in manifest.json, package.json, and versions.json. These files agree for 0.1.41. The earlier 0.1.40 desktop Website + Email UAT, native Content Calendar backend checks, Sites 0.15.38 security post-update and cross-Customer authorization checks passed. The 0.1.41 desktop runtime and mobile platforms have not undergone a separate end-to-end acceptance run. Obsidian's Community source/build review has not yet been completed.
-
-versions.json maps each plugin version to the minimum compatible Obsidian version.
-
-A GitHub release uses the exact version number as its tag, for example:
-
-    0.1.0
-
-Release assets are:
-
-    manifest.json
-    main.js
-    styles.css
+Report issues at [GitHub Issues](https://github.com/kienteaching-arch/hakisend-publisher/issues). Never include passwords, access tokens or the plugin's local `data.json` in support messages.
 
 ## License
 
-HakiSend Publisher is released under the MIT License.
-
-See LICENSE.
+Free and open-source under the [MIT License](LICENSE).
