@@ -23,9 +23,9 @@ assert(existsSync('README.md'), 'README.md is required');
 const runtime = readFileSync('main.js');
 const canonicalSource = readFileSync('src/runtime/publisher-bundle.cjs');
 assert(canonicalSource.equals(runtime), 'Canonical JavaScript source differs from release runtime');
-const expectedRuntimeHash = '54aea8d6731636996a4ef9426e3748052c1d6989655bd68ec7e9ab11e881d6af';
+const expectedRuntimeHash = '32eb00c94f8ac93c59ac83d6f445c2af3938afd9b8b0148b81aae1aeae50fca0';
 const actualRuntimeHash = createHash('sha256').update(runtime).digest('hex');
-assert.equal(actualRuntimeHash, expectedRuntimeHash, 'runtime drift from reviewed 0.1.44 mobile-calendar candidate');
+assert.equal(actualRuntimeHash, expectedRuntimeHash, 'runtime drift from reviewed 0.1.46 markdown-quote preflight candidate');
 
 function walk(directory = '.', prefix = '') {
   const paths = [];

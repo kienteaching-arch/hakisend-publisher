@@ -41,6 +41,8 @@ The plugin itself is free. Some operations may require an eligible HakiSend serv
 
 Saving a draft and publishing a website are separate actions.
 
+**Markdown safety check:** Before saving a website post, HakiSend Publisher flags article-wide nested blockquotes (e.g. repeated `>>>`) that can make text unreadable on mobile. Correct the source note and retry; the plugin does not rewrite your text. See [Markdown quote preflight](docs/MARKDOWN_QUOTE_PREFLIGHT.md).
+
 ## Get started: create an Email Only message
 
 1. Open a regular Markdown note outside the **HakiSend Emails** folder.
