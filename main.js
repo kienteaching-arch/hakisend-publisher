@@ -2222,6 +2222,54 @@ function stripYamlFrontmatter(markdown) {
   }
   return source;
 }
+
+// HAKISEND_MARKDOWN_QUOTE_PREFLIGHT_BEGIN
+// Detect article-wide nested blockquotes before saving, publishing or scheduling.
+// Do not rewrite text automatically: short intentional quotations remain valid.
+function detectMalformedArticleQuoteNesting(markdown) {
+  if (typeof markdown !== "string") return null;
+  const lines = markdown.split(/\r?\n/);
+  let fenceChar = "", fenceLength = 0;
+  let nestedLines = 0, nestedHeadings = 0, maxDepth = 0;
+  for (const line of lines) {
+    if (/^ {4,}/.test(line)) continue;
+    const quote = line.match(/^[ \t]*(>+)[ \t]?(.*)$/);
+    const inner = quote ? quote[2] : line;
+    const marker = inner.trimStart().match(/^(`{3,}|~{3,})/);
+    if (marker) {
+      const char = marker[1][0];
+      if (!fenceChar) {
+        fenceChar = char;
+        fenceLength = marker[1].length;
+      } else if (char === fenceChar && marker[1].length >= fenceLength) {
+        fenceChar = "";
+        fenceLength = 0;
+      }
+      continue;
+    }
+    if (fenceChar || !quote || quote[1].length < 2) continue;
+    nestedLines++;
+    maxDepth = Math.max(maxDepth, quote[1].length);
+    if (/^#{1,6}[ \t]+\S/.test(inner)) nestedHeadings++;
+  }
+  if (nestedLines >= 8 && (nestedHeadings >= 2 ||
+      (maxDepth >= 3 && nestedLines / Math.max(1, lines.length) >= 0.6))) {
+    return { nestedLines, nestedHeadings, maxDepth };
+  }
+  return null;
+}
+function assertNoMalformedArticleQuoteNesting(markdown) {
+  const issue = detectMalformedArticleQuoteNesting(markdown);
+  if (!issue) return;
+  throw new Error(
+    "HakiSend stopped this post before saving: " + issue.nestedLines +
+    " lines have nested Markdown quotes (max depth " + issue.maxDepth +
+    "). Check article-wide >>>/>>>> prefixes in Obsidian. " +
+    "Short intentional quotations are allowed; no remote post was saved."
+  );
+}
+// HAKISEND_MARKDOWN_QUOTE_PREFLIGHT_END
+
 function stripAuthoringInputBlocks(markdown) {
   const lines = markdown.split("\n");
   const output = [];
@@ -9098,6 +9146,7 @@ Content-Type: ${mime}\r
     body = stripAuthoringInputBlocks(
       body
     );
+    assertNoMalformedArticleQuoteNesting(body);
     const mediaCache = /* @__PURE__ */ new Map();
     body = await this.rewriteLocalImages(
       body,
